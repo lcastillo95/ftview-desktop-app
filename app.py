@@ -3,6 +3,7 @@ import io
 import math
 import os
 import re
+import shutil
 import sqlite3
 import sys
 import threading
@@ -515,19 +516,28 @@ class FTViewDatabaseHub:
     self.lock = threading.RLock()
     app_dir = get_app_data_path()
     self.db_path = os.path.join(app_dir, "hmitagfinder.db")
-    self._init_db()
+    self._init_db_safe()
 
-  def _connect(self):
-    conn = sqlite3.connect(self.db_path, timeout=30.0)
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA synchronous=NORMAL;")
-    conn.execute("PRAGMA busy_timeout=30000;")
-    return conn
-
-  def _init_db(self):
-    with self.lock:
-      conn = self._connect()
+  def _init_db_safe(self):
+    try:
+      self._setup_schema()
+    except Exception as e:
+      print(f"Warning: Database error encountered on startup ({e}). Rebuilding clean schema.")
       try:
+        if os.path.exists(self.db_path):
+          os.remove(self.db_path)
+        for ext in ("-wal", "-shm"):
+          if os.path.exists(self.db_path + ext):
+            os.remove(self.db_path + ext)
+      except Exception:
+        pass
+      self._setup_schema()
+
+  def _setup_schema(self):
+    with self.lock:
+      with sqlite3.connect(self.db_path, timeout=30.0) as conn:
+        conn.execute("PRAGMA journal_mode=TRUNCATE;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
         cur = conn.cursor()
         cur.execute("""
                     CREATE TABLE IF NOT EXISTS display_files (
@@ -545,7 +555,6 @@ class FTViewDatabaseHub:
                         tags TEXT
                     )
                 """)
-
         cur.execute("PRAGMA table_info(display_files);")
         df_cols = [row[1] for row in cur.fetchall()]
         if "display_normalized" not in df_cols:
@@ -576,9 +585,6 @@ class FTViewDatabaseHub:
         )
         cur.execute("CREATE INDEX IF NOT EXISTS idx_tags ON hmi_elements(tags)")
         conn.commit()
-        conn.execute("PRAGMA wal_checkpoint(PASSIVE);")
-      finally:
-        conn.close()
 
   def normalize_display_name(self, name: str) -> str:
     base = os.path.splitext(name)[0]
@@ -677,8 +683,7 @@ class FTViewDatabaseHub:
         )
 
     with self.lock:
-      conn = self._connect()
-      try:
+      with sqlite3.connect(self.db_path, timeout=30.0) as conn:
         cur = conn.cursor()
         cur.execute(
             """
@@ -699,14 +704,10 @@ class FTViewDatabaseHub:
               rows_to_insert,
           )
         conn.commit()
-        conn.execute("PRAGMA wal_checkpoint(PASSIVE);")
-      finally:
-        conn.close()
 
   def get_xml_bytes(self, display_name: str) -> bytes:
     with self.lock:
-      conn = self._connect()
-      try:
+      with sqlite3.connect(self.db_path, timeout=30.0) as conn:
         cur = conn.cursor()
         cur.execute(
             "SELECT xml_bytes FROM display_files WHERE display_name = ?",
@@ -714,50 +715,36 @@ class FTViewDatabaseHub:
         )
         row = cur.fetchone()
         return row[0] if row else None
-      finally:
-        conn.close()
 
   def get_summary(self):
     with self.lock:
-      conn = self._connect()
-      try:
+      with sqlite3.connect(self.db_path, timeout=30.0) as conn:
         cur = conn.cursor()
         cur.execute("SELECT COUNT(*) FROM display_files")
         displays_count = cur.fetchone()[0] or 0
         cur.execute("SELECT COUNT(*) FROM hmi_elements")
         elements_count = cur.fetchone()[0] or 0
         return {"displays": displays_count, "elements": elements_count}
-      finally:
-        conn.close()
 
   def clear_database(self):
     with self.lock:
-      conn = self._connect()
-      try:
+      with sqlite3.connect(self.db_path, timeout=30.0) as conn:
         cur = conn.cursor()
         cur.execute("DELETE FROM hmi_elements;")
         cur.execute("DELETE FROM display_files;")
         conn.commit()
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
         return {"displays": 0, "elements": 0}
-      finally:
-        conn.close()
 
   def get_all_displays(self):
     with self.lock:
-      conn = self._connect()
-      try:
+      with sqlite3.connect(self.db_path, timeout=30.0) as conn:
         cur = conn.cursor()
         cur.execute(
-            "SELECT display_name, display_normalized FROM display_files ORDER"
-            " BY display_name"
+            "SELECT display_name, display_normalized FROM display_files ORDER BY"
+            " display_name"
         )
         rows = cur.fetchall()
-        return [
-            {"display_name": r[0], "display_normalized": r[1]} for r in rows
-        ]
-      finally:
-        conn.close()
+        return [{"display_name": r[0], "display_normalized": r[1]} for r in rows]
 
   def search_by_display(self, query: str = ""):
     query_str = (query or "").strip()
@@ -766,8 +753,7 @@ class FTViewDatabaseHub:
 
     norm_q = self.normalize_display_name(query_str)
     with self.lock:
-      conn = self._connect()
-      try:
+      with sqlite3.connect(self.db_path, timeout=30.0) as conn:
         cur = conn.cursor()
         cur.execute(
             """
@@ -778,19 +764,14 @@ class FTViewDatabaseHub:
             (f"%{norm_q}%", f"%{query_str}%"),
         )
         rows = cur.fetchall()
-        return [
-            {"display_name": r[0], "display_normalized": r[1]} for r in rows
-        ]
-      finally:
-        conn.close()
+        return [{"display_name": r[0], "display_normalized": r[1]} for r in rows]
 
   def search_by_label(self, query: str = ""):
     query_str = (query or "").strip()
     if not query_str:
       return []
     with self.lock:
-      conn = self._connect()
-      try:
+      with sqlite3.connect(self.db_path, timeout=30.0) as conn:
         cur = conn.cursor()
         cur.execute(
             """
@@ -806,16 +787,13 @@ class FTViewDatabaseHub:
             {"display_name": r[0], "label_text": r[1], "tags": r[2]}
             for r in rows
         ]
-      finally:
-        conn.close()
 
   def search_by_tag(self, query: str = ""):
     query_str = (query or "").strip()
     if not query_str:
       return []
     with self.lock:
-      conn = self._connect()
-      try:
+      with sqlite3.connect(self.db_path, timeout=30.0) as conn:
         cur = conn.cursor()
         cur.execute(
             """
@@ -831,8 +809,6 @@ class FTViewDatabaseHub:
             {"display_name": r[0], "label_text": r[1], "tags": r[2]}
             for r in rows
         ]
-      finally:
-        conn.close()
 
 
 class DesktopAppBridge:
@@ -852,13 +828,17 @@ class DesktopAppBridge:
     }
 
   def get_initial_data(self):
-    summary = self.db.get_summary()
-    displays = self.db.get_all_displays()
-    return {
-        "displays_count": summary["displays"],
-        "elements_count": summary["elements"],
-        "displays": displays,
-    }
+    try:
+      summary = self.db.get_summary()
+      displays = self.db.get_all_displays()
+      return {
+          "displays_count": summary["displays"],
+          "elements_count": summary["elements"],
+          "displays": displays,
+      }
+    except Exception as e:
+      print(f"Error in get_initial_data: {e}")
+      return {"displays_count": 0, "elements_count": 0, "displays": []}
 
   def open_import_dialog(self):
     if not self.window:
@@ -917,23 +897,43 @@ class DesktopAppBridge:
     return self.import_state
 
   def clear_database(self):
-    return self.db.clear_database()
+    try:
+      return self.db.clear_database()
+    except Exception as e:
+      print(f"Error clearing database: {e}")
+      return {"displays": 0, "elements": 0}
 
   def search_displays(self, query=""):
-    return self.db.search_by_display(query)
+    try:
+      return self.db.search_by_display(query)
+    except Exception as e:
+      print(f"Error search_displays: {e}")
+      return []
 
   def search_labels(self, query=""):
-    return self.db.search_by_label(query)
+    try:
+      return self.db.search_by_label(query)
+    except Exception as e:
+      print(f"Error search_labels: {e}")
+      return []
 
   def search_tags(self, query=""):
-    return self.db.search_by_tag(query)
+    try:
+      return self.db.search_by_tag(query)
+    except Exception as e:
+      print(f"Error search_tags: {e}")
+      return []
 
   def get_screen_render_data(self, display_name):
-    xml_bytes = self.db.get_xml_bytes(display_name)
-    if not xml_bytes:
+    try:
+      xml_bytes = self.db.get_xml_bytes(display_name)
+      if not xml_bytes:
+        return None
+      compiler = FlattenedFTViewCompiler(xml_bytes, display_name)
+      return compiler.compile_svg_bundle()
+    except Exception as e:
+      print(f"Error rendering screen {display_name}: {e}")
       return None
-    compiler = FlattenedFTViewCompiler(xml_bytes, display_name)
-    return compiler.compile_svg_bundle()
 
 
 MAIN_PORTAL_HTML = """<!DOCTYPE html>
