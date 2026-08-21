@@ -980,18 +980,22 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             color: #FFFFFF;
         }
 
-        /* Rustic Fallback / Error Stage */
-        #screen-fallback {
+        /* Rustic Overlay Windows */
+        #screen-fallback, #clear-db-modal {
             display: none;
             position: absolute;
             top: 0; left: 0; width: 100%; height: 100%;
-            background: #000000;
+            background: rgba(0, 0, 0, 0.9);
             z-index: 250;
             flex-direction: column;
             justify-content: center;
             align-items: center;
             padding: 24px;
             text-align: center;
+        }
+        #clear-db-modal {
+            position: fixed;
+            z-index: 600;
         }
         .fallback-box {
             border: 3px solid #FFFFFF;
@@ -1010,6 +1014,14 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             letter-spacing: -2px;
             color: #FFFFFF;
             line-height: 1;
+        }
+        .skull-ascii {
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 32px;
+            font-weight: 900;
+            color: #FFFFFF;
+            line-height: 1.1;
+            white-space: pre;
         }
         .fallback-msg {
             font-family: 'Consolas', monospace;
@@ -1101,7 +1113,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             <div class="author-badge">Created by <b>Luis Castillo</b></div>
         </div>
         <div class="header-actions">
-            <button class="btn btn-danger" onclick="confirmClearDatabase()">Clear Database</button>
+            <button class="btn btn-danger" onclick="openClearDatabaseModal()">Clear Database</button>
             <button class="btn" onclick="startLoadingBatch()">Load & Parse XML Files</button>
         </div>
     </header>
@@ -1173,6 +1185,20 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
                 </div>
 
                 <svg id="screen-svg-canvas" preserveAspectRatio="xMidYMid meet"></svg>
+            </div>
+        </div>
+    </div>
+
+    <!-- Rustic Warning Modal for Database Clearing -->
+    <div id="clear-db-modal">
+        <div class="fallback-box">
+            <div class="skull-ascii">[ ! ]
+ /_\\ </div>
+            <div class="fallback-msg">warning: purge database</div>
+            <div class="fallback-sub">You are about to delete all cached screens and indexed PLC tag records. This cannot be undone.</div>
+            <div style="display: flex; gap: 10px; margin-top: 8px;">
+                <button class="btn btn-danger" onclick="executeClearDatabase()">Confirm Clear</button>
+                <button class="btn btn-nav" onclick="closeClearDatabaseModal()">Cancel</button>
             </div>
         </div>
     </div>
@@ -1301,13 +1327,20 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             }, 100);
         }
 
-        async function confirmClearDatabase() {
-            if (confirm("Are you sure you want to clear all indexed displays and cached screens from the database?")) {
-                const stats = await window.pywebview.api.clear_database();
-                document.getElementById('stat-displays').textContent = stats.displays;
-                document.getElementById('stat-elements').textContent = stats.elements;
-                onSearchInput('');
-            }
+        function openClearDatabaseModal() {
+            document.getElementById('clear-db-modal').style.display = 'flex';
+        }
+
+        function closeClearDatabaseModal() {
+            document.getElementById('clear-db-modal').style.display = 'none';
+        }
+
+        async function executeClearDatabase() {
+            closeClearDatabaseModal();
+            const stats = await window.pywebview.api.clear_database();
+            document.getElementById('stat-displays').textContent = stats.displays;
+            document.getElementById('stat-elements').textContent = stats.elements;
+            onSearchInput('');
         }
 
         async function onSearchInput(query) {
@@ -1551,6 +1584,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
                 hideContextMenu();
+                closeClearDatabaseModal();
                 if (isInspectorOpen) closeInspectorModal();
                 else if (document.getElementById('screen-viewer-view').style.display === 'flex') closeScreenViewer();
             }
