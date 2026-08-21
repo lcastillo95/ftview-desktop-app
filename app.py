@@ -58,9 +58,7 @@ class FlattenedFTViewCompiler:
     if name:
       info.append(f"Name: {name}")
 
-    # Tag extraction pattern supporting FactoryTalk parameters (#1), Area shortcuts, and direct PLC brackets
     tag_pattern = r"\{([A-Za-z0-9_#/@\.\:\[\]\-\s\$\%]+)\}"
-
     for k, v in elem.attrib.items():
       if isinstance(v, str):
         for tag_match in re.findall(tag_pattern, v):
@@ -122,7 +120,6 @@ class FlattenedFTViewCompiler:
 
     tag_attr = self._build_tag_attr(elem_tags)
 
-    # 1. Multi-State Indicators
     if tag in ("multistateIndicator", "pilotedListIndicator"):
       x = round(float(elem.attrib.get("left", 0)), 1)
       y = round(float(elem.attrib.get("top", 0)), 1)
@@ -205,7 +202,6 @@ class FlattenedFTViewCompiler:
       out.append("</g>")
       return "".join(out)
 
-    # 2. Rectangles, Rounded Rectangles & Panels
     elif tag in ("rectangle", "roundedRectangle", "panel"):
       x = round(float(elem.attrib.get("left", 0)), 1)
       y = round(float(elem.attrib.get("top", 0)), 1)
@@ -223,7 +219,6 @@ class FlattenedFTViewCompiler:
           f" {tag_attr}/>"
       )
 
-    # 3. Lines
     elif tag == "line":
       pts = elem.attrib.get("line", "").strip().split()
       if len(pts) >= 4:
@@ -239,7 +234,6 @@ class FlattenedFTViewCompiler:
             f" {tf} {tag_attr}/>"
         )
 
-    # 4. Polygons & Polylines
     elif tag in ("polygon", "polyline"):
       raw = elem.attrib.get("path", "").strip().split()
       if len(raw) >= 4:
@@ -259,7 +253,6 @@ class FlattenedFTViewCompiler:
             f' stroke-width="{lw}" {tf} {tag_attr}/>'
         )
 
-    # 5. Ellipses & Circles
     elif tag in ("ellipse", "circle"):
       l = round(float(elem.attrib.get("left", 0)), 1)
       t_pos = round(float(elem.attrib.get("top", 0)), 1)
@@ -279,7 +272,6 @@ class FlattenedFTViewCompiler:
           f' stroke="{stroke}" stroke-width="{lw}" {tf} {tag_attr}/>'
       )
 
-    # 6. Arcs
     elif tag == "arc":
       l = round(float(elem.attrib.get("left", 0)), 1)
       t_pos = round(float(elem.attrib.get("top", 0)), 1)
@@ -315,7 +307,6 @@ class FlattenedFTViewCompiler:
             f" {tag_attr}/>"
         )
 
-    # 7. Text
     elif tag == "text":
       x = round(float(elem.attrib.get("left", 0)), 1)
       y = round(float(elem.attrib.get("top", 0)), 1)
@@ -347,7 +338,6 @@ class FlattenedFTViewCompiler:
         )
       return f"<g {tf} {tag_attr}>" + "".join(tspans) + "</g>"
 
-    # 8. All Pushbutton Variations
     elif tag in (
         "button",
         "momentaryButton",
@@ -397,7 +387,6 @@ class FlattenedFTViewCompiler:
       out.append("</g>")
       return "".join(out)
 
-    # 9. Numeric/String Inputs and Displays
     elif tag in (
         "numericDisplay",
         "stringDisplay",
@@ -427,7 +416,6 @@ class FlattenedFTViewCompiler:
           "</g>"
       )
 
-    # 10. Gauges & Bar Graphs
     elif tag in ("barGraph", "gauge", "trend"):
       x = round(float(elem.attrib.get("left", 0)), 1)
       y = round(float(elem.attrib.get("top", 0)), 1)
@@ -445,7 +433,6 @@ class FlattenedFTViewCompiler:
           "</g>"
       )
 
-    # 11. Images & Symbols
     elif tag in ("image", "symbol"):
       x = round(float(elem.attrib.get("left", 0)), 1)
       y = round(float(elem.attrib.get("top", 0)), 1)
@@ -462,7 +449,6 @@ class FlattenedFTViewCompiler:
           "</g>"
       )
 
-    # 12. Fallback for any standard visual container
     elif "left" in elem.attrib and "top" in elem.attrib:
       x = round(float(elem.attrib.get("left", 0)), 1)
       y = round(float(elem.attrib.get("top", 0)), 1)
@@ -476,7 +462,6 @@ class FlattenedFTViewCompiler:
     return ""
 
   def _render_node(self, node, accumulated_tags: list) -> list:
-    """Recursive hierarchy walker that preserves group matrix transforms."""
     if node.tag in (
         "displaySettings",
         "vbaProject",
@@ -493,7 +478,6 @@ class FlattenedFTViewCompiler:
       if lt not in current_tags:
         current_tags.append(lt)
 
-    # If it's a group, wrap children inside a <g> that preserves the group's transform matrix
     if node.tag == "group":
       tf = self._get_transform(node)
       tag_attr = self._build_tag_attr(current_tags)
@@ -531,66 +515,70 @@ class FTViewDatabaseHub:
     self.lock = threading.RLock()
     app_dir = get_app_data_path()
     self.db_path = os.path.join(app_dir, "hmitagfinder.db")
-
-    self.conn = sqlite3.connect(
-        self.db_path, timeout=30.0, check_same_thread=False
-    )
-    self.conn.execute("PRAGMA journal_mode=WAL;")
-    self.conn.execute("PRAGMA synchronous=NORMAL;")
-    self.conn.execute("PRAGMA busy_timeout=30000;")
     self._init_db()
+
+  def _connect(self):
+    conn = sqlite3.connect(self.db_path, timeout=30.0)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    conn.execute("PRAGMA busy_timeout=30000;")
+    return conn
 
   def _init_db(self):
     with self.lock:
-      cur = self.conn.cursor()
-      cur.execute("""
-                CREATE TABLE IF NOT EXISTS display_files (
-                    display_name TEXT PRIMARY KEY,
-                    display_normalized TEXT,
-                    xml_bytes BLOB
-                )
-            """)
-      cur.execute("""
-                CREATE TABLE IF NOT EXISTS hmi_elements (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    display_name TEXT,
-                    display_normalized TEXT,
-                    label_text TEXT,
-                    tags TEXT
-                )
-            """)
+      conn = self._connect()
+      try:
+        cur = conn.cursor()
+        cur.execute("""
+                    CREATE TABLE IF NOT EXISTS display_files (
+                        display_name TEXT PRIMARY KEY,
+                        display_normalized TEXT,
+                        xml_bytes BLOB
+                    )
+                """)
+        cur.execute("""
+                    CREATE TABLE IF NOT EXISTS hmi_elements (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        display_name TEXT,
+                        display_normalized TEXT,
+                        label_text TEXT,
+                        tags TEXT
+                    )
+                """)
 
-      # Schema upgrades
-      cur.execute("PRAGMA table_info(display_files);")
-      df_cols = [row[1] for row in cur.fetchall()]
-      if "display_normalized" not in df_cols:
+        cur.execute("PRAGMA table_info(display_files);")
+        df_cols = [row[1] for row in cur.fetchall()]
+        if "display_normalized" not in df_cols:
+          cur.execute(
+              "ALTER TABLE display_files ADD COLUMN display_normalized TEXT;"
+          )
+
+        cur.execute("PRAGMA table_info(hmi_elements);")
+        he_cols = [row[1] for row in cur.fetchall()]
+        if "display_normalized" not in he_cols:
+          cur.execute(
+              "ALTER TABLE hmi_elements ADD COLUMN display_normalized TEXT;"
+          )
+
         cur.execute(
-            "ALTER TABLE display_files ADD COLUMN display_normalized TEXT;"
+            "CREATE INDEX IF NOT EXISTS idx_disp_files ON"
+            " display_files(display_normalized)"
         )
-
-      cur.execute("PRAGMA table_info(hmi_elements);")
-      he_cols = [row[1] for row in cur.fetchall()]
-      if "display_normalized" not in he_cols:
         cur.execute(
-            "ALTER TABLE hmi_elements ADD COLUMN display_normalized TEXT;"
+            "CREATE INDEX IF NOT EXISTS idx_norm ON"
+            " hmi_elements(display_normalized)"
         )
-
-      cur.execute(
-          "CREATE INDEX IF NOT EXISTS idx_disp_files ON"
-          " display_files(display_normalized)"
-      )
-      cur.execute(
-          "CREATE INDEX IF NOT EXISTS idx_norm ON"
-          " hmi_elements(display_normalized)"
-      )
-      cur.execute(
-          "CREATE INDEX IF NOT EXISTS idx_disp ON hmi_elements(display_name)"
-      )
-      cur.execute(
-          "CREATE INDEX IF NOT EXISTS idx_lbl ON hmi_elements(label_text)"
-      )
-      cur.execute("CREATE INDEX IF NOT EXISTS idx_tags ON hmi_elements(tags)")
-      self.conn.commit()
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_disp ON hmi_elements(display_name)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lbl ON hmi_elements(label_text)"
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_tags ON hmi_elements(tags)")
+        conn.commit()
+        conn.execute("PRAGMA wal_checkpoint(PASSIVE);")
+      finally:
+        conn.close()
 
   def normalize_display_name(self, name: str) -> str:
     base = os.path.splitext(name)[0]
@@ -689,63 +677,87 @@ class FTViewDatabaseHub:
         )
 
     with self.lock:
-      cur = self.conn.cursor()
-      cur.execute(
-          """
-                INSERT OR REPLACE INTO display_files (display_name, display_normalized, xml_bytes)
-                VALUES (?, ?, ?)
-            """,
-          (display_name, norm_name, xml_bytes),
-      )
-      cur.execute(
-          "DELETE FROM hmi_elements WHERE display_name = ?", (display_name,)
-      )
-      if rows_to_insert:
-        cur.executemany(
+      conn = self._connect()
+      try:
+        cur = conn.cursor()
+        cur.execute(
             """
-                    INSERT INTO hmi_elements (display_name, display_normalized, label_text, tags)
-                    VALUES (?, ?, ?, ?)
-                    """,
-            rows_to_insert,
+                    INSERT OR REPLACE INTO display_files (display_name, display_normalized, xml_bytes)
+                    VALUES (?, ?, ?)
+                """,
+            (display_name, norm_name, xml_bytes),
         )
-      self.conn.commit()
+        cur.execute(
+            "DELETE FROM hmi_elements WHERE display_name = ?", (display_name,)
+        )
+        if rows_to_insert:
+          cur.executemany(
+              """
+                        INSERT INTO hmi_elements (display_name, display_normalized, label_text, tags)
+                        VALUES (?, ?, ?, ?)
+                        """,
+              rows_to_insert,
+          )
+        conn.commit()
+        conn.execute("PRAGMA wal_checkpoint(PASSIVE);")
+      finally:
+        conn.close()
 
   def get_xml_bytes(self, display_name: str) -> bytes:
     with self.lock:
-      cur = self.conn.cursor()
-      cur.execute(
-          "SELECT xml_bytes FROM display_files WHERE display_name = ?",
-          (display_name,),
-      )
-      row = cur.fetchone()
-      return row[0] if row else None
+      conn = self._connect()
+      try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT xml_bytes FROM display_files WHERE display_name = ?",
+            (display_name,),
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
+      finally:
+        conn.close()
 
   def get_summary(self):
     with self.lock:
-      cur = self.conn.cursor()
-      cur.execute("SELECT COUNT(*) FROM display_files")
-      displays_count = cur.fetchone()[0] or 0
-      cur.execute("SELECT COUNT(*) FROM hmi_elements")
-      elements_count = cur.fetchone()[0] or 0
-      return {"displays": displays_count, "elements": elements_count}
+      conn = self._connect()
+      try:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM display_files")
+        displays_count = cur.fetchone()[0] or 0
+        cur.execute("SELECT COUNT(*) FROM hmi_elements")
+        elements_count = cur.fetchone()[0] or 0
+        return {"displays": displays_count, "elements": elements_count}
+      finally:
+        conn.close()
 
   def clear_database(self):
     with self.lock:
-      cur = self.conn.cursor()
-      cur.execute("DELETE FROM hmi_elements;")
-      cur.execute("DELETE FROM display_files;")
-      self.conn.commit()
-      return {"displays": 0, "elements": 0}
+      conn = self._connect()
+      try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM hmi_elements;")
+        cur.execute("DELETE FROM display_files;")
+        conn.commit()
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+        return {"displays": 0, "elements": 0}
+      finally:
+        conn.close()
 
   def get_all_displays(self):
     with self.lock:
-      cur = self.conn.cursor()
-      cur.execute(
-          "SELECT display_name, display_normalized FROM display_files ORDER BY"
-          " display_name"
-      )
-      rows = cur.fetchall()
-      return [{"display_name": r[0], "display_normalized": r[1]} for r in rows]
+      conn = self._connect()
+      try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT display_name, display_normalized FROM display_files ORDER"
+            " BY display_name"
+        )
+        rows = cur.fetchall()
+        return [
+            {"display_name": r[0], "display_normalized": r[1]} for r in rows
+        ]
+      finally:
+        conn.close()
 
   def search_by_display(self, query: str = ""):
     query_str = (query or "").strip()
@@ -754,59 +766,73 @@ class FTViewDatabaseHub:
 
     norm_q = self.normalize_display_name(query_str)
     with self.lock:
-      cur = self.conn.cursor()
-      cur.execute(
-          """
-                SELECT display_name, display_normalized FROM display_files 
-                WHERE display_normalized LIKE ? OR display_name LIKE ?
-                ORDER BY display_name LIMIT 100
-                """,
-          (f"%{norm_q}%", f"%{query_str}%"),
-      )
-      rows = cur.fetchall()
-      return [{"display_name": r[0], "display_normalized": r[1]} for r in rows]
+      conn = self._connect()
+      try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+                    SELECT display_name, display_normalized FROM display_files 
+                    WHERE display_normalized LIKE ? OR display_name LIKE ?
+                    ORDER BY display_name LIMIT 100
+                    """,
+            (f"%{norm_q}%", f"%{query_str}%"),
+        )
+        rows = cur.fetchall()
+        return [
+            {"display_name": r[0], "display_normalized": r[1]} for r in rows
+        ]
+      finally:
+        conn.close()
 
   def search_by_label(self, query: str = ""):
     query_str = (query or "").strip()
     if not query_str:
       return []
     with self.lock:
-      cur = self.conn.cursor()
-      cur.execute(
-          """
-                SELECT display_name, label_text, tags 
-                FROM hmi_elements 
-                WHERE label_text LIKE ? 
-                ORDER BY display_name LIMIT 100
-                """,
-          (f"%{query_str}%",),
-      )
-      rows = cur.fetchall()
-      return [
-          {"display_name": r[0], "label_text": r[1], "tags": r[2]}
-          for r in rows
-      ]
+      conn = self._connect()
+      try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+                    SELECT display_name, label_text, tags 
+                    FROM hmi_elements 
+                    WHERE label_text LIKE ? 
+                    ORDER BY display_name LIMIT 100
+                    """,
+            (f"%{query_str}%",),
+        )
+        rows = cur.fetchall()
+        return [
+            {"display_name": r[0], "label_text": r[1], "tags": r[2]}
+            for r in rows
+        ]
+      finally:
+        conn.close()
 
   def search_by_tag(self, query: str = ""):
     query_str = (query or "").strip()
     if not query_str:
       return []
     with self.lock:
-      cur = self.conn.cursor()
-      cur.execute(
-          """
-                SELECT display_name, label_text, tags 
-                FROM hmi_elements 
-                WHERE tags LIKE ? 
-                ORDER BY display_name LIMIT 100
-                """,
-          (f"%{query_str}%",),
-      )
-      rows = cur.fetchall()
-      return [
-          {"display_name": r[0], "label_text": r[1], "tags": r[2]}
-          for r in rows
-      ]
+      conn = self._connect()
+      try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+                    SELECT display_name, label_text, tags 
+                    FROM hmi_elements 
+                    WHERE tags LIKE ? 
+                    ORDER BY display_name LIMIT 100
+                    """,
+            (f"%{query_str}%",),
+        )
+        rows = cur.fetchall()
+        return [
+            {"display_name": r[0], "label_text": r[1], "tags": r[2]}
+            for r in rows
+        ]
+      finally:
+        conn.close()
 
 
 class DesktopAppBridge:
@@ -1466,38 +1492,41 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
         let overlayActive = false;
         let isInspectorOpen = false;
         let searchDebounceTimer = null;
-        let pollTimer = null;
         let currentDisplayLoading = null;
         let renderTimeoutTimer = null;
-        let initialLoadDone = false;
+        let isInitialLoaded = false;
+        let isInitialLoading = false;
+        let isImporting = false;
 
         function escapeJsString(str) {
             return (str || '').replace(/\\\\/g, '\\\\\\\\').replace(/'/g, "\\\\'");
         }
 
-        async function tryInitialLoad() {
-            if (initialLoadDone) return;
+        async function requestInitialLoad() {
+            if (isInitialLoaded || isInitialLoading) return;
             if (!window.pywebview || !window.pywebview.api || !window.pywebview.api.get_initial_data) {
+                setTimeout(requestInitialLoad, 150);
                 return;
             }
 
+            isInitialLoading = true;
             try {
                 const data = await window.pywebview.api.get_initial_data();
                 if (data) {
-                    initialLoadDone = true;
-                    clearInterval(initInterval);
-                    document.getElementById('stat-displays').textContent = data.displays_count;
-                    document.getElementById('stat-elements').textContent = data.elements_count;
-                    renderDisplaysTable(data.displays);
+                    isInitialLoaded = true;
+                    document.getElementById('stat-displays').textContent = data.displays_count || 0;
+                    document.getElementById('stat-elements').textContent = data.elements_count || 0;
+                    renderDisplaysTable(data.displays || []);
                 }
             } catch (e) {
-                console.warn("Retrying initial load...", e);
+                console.error("Initial load error:", e);
+            } finally {
+                isInitialLoading = false;
             }
         }
 
-        const initInterval = setInterval(tryInitialLoad, 100);
-        window.addEventListener('pywebviewready', tryInitialLoad);
-        document.addEventListener('DOMContentLoaded', tryInitialLoad);
+        window.addEventListener('pywebviewready', requestInitialLoad);
+        document.addEventListener('DOMContentLoaded', requestInitialLoad);
 
         function renderDisplaysTable(results) {
             const tbody = document.getElementById('table-body');
@@ -1543,15 +1572,16 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             clearTimeout(searchDebounceTimer);
             searchDebounceTimer = setTimeout(() => {
                 performSearch(val);
-            }, 200);
+            }, 250);
         }
 
         async function startLoadingBatch() {
+            if (isImporting) return;
             let resp;
             try {
                 resp = await window.pywebview.api.open_import_dialog();
             } catch (e) {
-                console.error("Open dialog error", e);
+                console.error("Dialog error:", e);
                 document.getElementById('progress-modal').style.display = 'none';
                 return;
             }
@@ -1561,32 +1591,40 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
                 return;
             }
 
+            isImporting = true;
             document.getElementById('progress-modal').style.display = 'flex';
             document.getElementById('progress-fill').style.width = '0%';
             document.getElementById('progress-status-file').textContent = 'Starting parsing...';
             document.getElementById('progress-status-count').textContent = '0 / ' + resp.total;
 
-            clearInterval(pollTimer);
-            pollTimer = setInterval(async () => {
-                try {
-                    const st = await window.pywebview.api.get_import_status();
-                    if (!st) return;
+            pollImportStatus();
+        }
 
+        async function pollImportStatus() {
+            if (!isImporting) return;
+            try {
+                const st = await window.pywebview.api.get_import_status();
+                if (st) {
                     document.getElementById('progress-status-file').textContent = st.current_file || 'Processing...';
-                    document.getElementById('progress-status-count').textContent = (st.current_index || 0) + ' / ' + (st.total_files || resp.total);
+                    document.getElementById('progress-status-count').textContent = (st.current_index || 0) + ' / ' + (st.total_files || 0);
                     document.getElementById('progress-fill').style.width = (st.percent || 0) + '%';
 
                     if (st.done) {
-                        clearInterval(pollTimer);
+                        isImporting = false;
                         document.getElementById('progress-modal').style.display = 'none';
                         document.getElementById('stat-displays').textContent = st.displays;
                         document.getElementById('stat-elements').textContent = st.elements;
                         await performSearch(document.getElementById('main-search-input').value || '');
+                        return;
                     }
-                } catch (err) {
-                    console.error("Poll error", err);
                 }
-            }, 100);
+            } catch (err) {
+                console.error("Poll error:", err);
+            }
+
+            if (isImporting) {
+                setTimeout(pollImportStatus, 200);
+            }
         }
 
         function openClearDatabaseModal() {
@@ -1601,11 +1639,11 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             closeClearDatabaseModal();
             try {
                 const stats = await window.pywebview.api.clear_database();
-                document.getElementById('stat-displays').textContent = stats.displays;
-                document.getElementById('stat-elements').textContent = stats.elements;
+                document.getElementById('stat-displays').textContent = stats.displays || 0;
+                document.getElementById('stat-elements').textContent = stats.elements || 0;
                 await performSearch('');
             } catch (e) {
-                console.error("Clear DB error", e);
+                console.error("Clear DB error:", e);
             }
         }
 
@@ -1659,7 +1697,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
                     `).join('');
                 }
             } catch (err) {
-                console.error("Search error", err);
+                console.error("Search error:", err);
             }
         }
 
