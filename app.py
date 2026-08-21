@@ -588,7 +588,6 @@ class DesktopAppBridge:
 
     file_paths = list(result)
 
-    # Ingestion worker thread keeps the UI fluid and unblocked
     def worker():
       total = len(file_paths)
       for idx, fp in enumerate(file_paths):
@@ -596,7 +595,6 @@ class DesktopAppBridge:
         escaped_name = html.escape(fname).replace("'", "\\'")
         progress = int(((idx + 1) / total) * 100)
 
-        # Notify UI via safe evaluation
         self.window.evaluate_js(
             f"onBatchProgress('{escaped_name}', {idx + 1}, {total},"
             f" {progress});"
@@ -632,7 +630,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>HMIFinder</title>
+    <title>HMITagFinder</title>
     <style>
         * { 
             box-sizing: border-box; 
@@ -908,6 +906,51 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             color: #FFFFFF;
         }
 
+        /* Rustic Fallback / Error Stage */
+        #screen-fallback {
+            display: none;
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: #000000;
+            z-index: 250;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 24px;
+            text-align: center;
+        }
+        .fallback-box {
+            border: 3px solid #FFFFFF;
+            padding: 32px 48px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 16px;
+            background: #000000;
+            max-width: 580px;
+        }
+        .sad-face-ascii {
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 48px;
+            font-weight: 900;
+            letter-spacing: -2px;
+            color: #FFFFFF;
+            line-height: 1;
+        }
+        .fallback-msg {
+            font-family: 'Consolas', monospace;
+            font-size: 15px;
+            font-weight: 700;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            color: #FFFFFF;
+        }
+        .fallback-sub {
+            font-size: 12px;
+            color: #888888;
+            font-family: 'Consolas', monospace;
+        }
+
         /* Inspector Modal */
         #inspector-modal {
             display: none;
@@ -980,7 +1023,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
 
     <header>
         <div class="header-title">
-            <h1>HMIFinder</h1>
+            <h1>HMITagFinder</h1>
             <div class="author-badge">Created by <b>Luis Castillo</b></div>
         </div>
         <div>
@@ -1027,7 +1070,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
         <div id="screen-viewer-view">
             <div class="viewer-top-bar">
                 <div style="display: flex; align-items: center; gap: 12px;">
-                    <button class="btn btn-nav" onclick="closeScreenViewer()">← Back to Search Hub</button>
+                    <button class="btn btn-nav" onclick="closeScreenViewer()">BACK TO SEARCH</button>
                     <span id="viewer-screen-title"><b>Screen:</b></span>
                 </div>
                 <div>
@@ -1041,6 +1084,20 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
                     </div>
                     <div class="scanner-text" id="loader-title">Rendering Display...</div>
                 </div>
+
+                <!-- Rustic Sad Face Fallback Overlay -->
+                <div id="screen-fallback">
+                    <div class="fallback-box">
+                        <div class="sad-face-ascii">:(</div>
+                        <div class="fallback-msg">looks like you are screwed</div>
+                        <div class="fallback-sub">Display rendering took too long or encountered invalid XML structure.</div>
+                        <div style="display: flex; gap: 10px; margin-top: 8px;">
+                            <button class="btn" onclick="retryCurrentScreen()">Retry Load</button>
+                            <button class="btn btn-nav" onclick="closeScreenViewer()">Back to Search</button>
+                        </div>
+                    </div>
+                </div>
+
                 <svg id="screen-svg-canvas" preserveAspectRatio="xMidYMid meet"></svg>
             </div>
         </div>
@@ -1094,6 +1151,8 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
         let overlayActive = false;
         let isInspectorOpen = false;
         let searchDebounceTimer = null;
+        let currentDisplayLoading = null;
+        let renderTimeoutTimer = null;
 
         function switchTab(tab) {
             currentTab = tab;
@@ -1198,30 +1257,62 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
         }
 
         async function openScreen(displayName) {
+            currentDisplayLoading = displayName;
+            clearTimeout(renderTimeoutTimer);
+
             const screenView = document.getElementById('screen-viewer-view');
             const loader = document.getElementById('screen-loader');
+            const fallback = document.getElementById('screen-fallback');
             const loaderTitle = document.getElementById('loader-title');
             const svg = document.getElementById('screen-svg-canvas');
 
             loaderTitle.textContent = `Loading ${displayName}...`;
             svg.innerHTML = '';
+            fallback.style.display = 'none';
             loader.style.display = 'flex';
             screenView.style.display = 'flex';
 
-            setTimeout(async () => {
-                const data = await window.pywebview.api.get_screen_render_data(displayName);
-                if (data) {
-                    svg.setAttribute('viewBox', `0 0 ${data.width} ${data.height}`);
-                    svg.style.backgroundColor = data.bg_color;
-                    svg.innerHTML = data.svg;
-                    document.getElementById('viewer-screen-title').innerHTML = `<b>Screen:</b> ${data.file_name} (${data.width}×${data.height})`;
-                }
+            // 6-second timeout fallback
+            renderTimeoutTimer = setTimeout(() => {
                 loader.style.display = 'none';
+                fallback.style.display = 'flex';
+            }, 6000);
+
+            setTimeout(async () => {
+                try {
+                    const data = await window.pywebview.api.get_screen_render_data(displayName);
+                    clearTimeout(renderTimeoutTimer);
+
+                    if (data) {
+                        svg.setAttribute('viewBox', `0 0 ${data.width} ${data.height}`);
+                        svg.style.backgroundColor = data.bg_color;
+                        svg.innerHTML = data.svg;
+                        document.getElementById('viewer-screen-title').innerHTML = `<b>Screen:</b> ${data.file_name} (${data.width}×${data.height})`;
+                        loader.style.display = 'none';
+                        fallback.style.display = 'none';
+                    } else {
+                        loader.style.display = 'none';
+                        fallback.style.display = 'flex';
+                    }
+                } catch (e) {
+                    clearTimeout(renderTimeoutTimer);
+                    loader.style.display = 'none';
+                    fallback.style.display = 'flex';
+                }
             }, 50);
         }
 
+        function retryCurrentScreen() {
+            if (currentDisplayLoading) {
+                openScreen(currentDisplayLoading);
+            }
+        }
+
         function closeScreenViewer() {
+            clearTimeout(renderTimeoutTimer);
             document.getElementById('screen-viewer-view').style.display = 'none';
+            document.getElementById('screen-fallback').style.display = 'none';
+            document.getElementById('screen-loader').style.display = 'none';
         }
 
         function toggleTagOverlay() {
@@ -1358,7 +1449,7 @@ def main():
   bridge = DesktopAppBridge(db)
 
   window = webview.create_window(
-      title="HMIFinder - Created by Luis Castillo",
+      title="HMITagFinder - Created by Luis Castillo",
       html=MAIN_PORTAL_HTML,
       js_api=bridge,
       width=1360,
