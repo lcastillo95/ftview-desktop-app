@@ -1195,7 +1195,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             <div class="skull-ascii">[ ! ]
  /_\\ </div>
             <div class="fallback-msg">warning: purge database</div>
-            <div class="fallback-sub">You are about to delete all cached screens and indexed PLC tag records. This cannot be undone.</div>
+            <div class="fallback-sub">Are you out of your mind? There ain't no way back from this.</div>
             <div style="display: flex; gap: 10px; margin-top: 8px;">
                 <button class="btn btn-danger" onclick="executeClearDatabase()">Confirm Clear</button>
                 <button class="btn btn-nav" onclick="closeClearDatabaseModal()">Cancel</button>
