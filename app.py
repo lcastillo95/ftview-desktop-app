@@ -2,6 +2,8 @@ import html
 import io
 import math
 import os
+import re
+import sqlite3
 import sys
 import tkinter as tk
 from tkinter import filedialog
@@ -352,9 +354,13 @@ class FlattenedFTViewCompiler:
     <style>
         * {{ box-sizing: border-box; margin: 0; padding: 0; }}
         html, body {{ width: 100%; height: 100%; background: #121212; display: flex; flex-direction: column; overflow: hidden; font-family: Arial, sans-serif; }}
-        #top-bar {{ height: 38px; background: #1f242d; border-bottom: 1px solid #333; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; color: #d1d5db; font-size: 13px; flex-shrink: 0; }}
-        #toggle-btn {{ background: #2563eb; color: white; border: none; padding: 4px 12px; font-size: 12px; font-weight: bold; border-radius: 4px; cursor: pointer; }}
-        .stage {{ flex: 1; width: 100%; height: calc(100vh - 38px); display: flex; justify-content: center; align-items: center; padding: 12px; overflow: hidden; }}
+        #top-bar {{ height: 42px; background: #1f242d; border-bottom: 1px solid #334155; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; color: #d1d5db; font-size: 13px; flex-shrink: 0; }}
+        .btn {{ padding: 5px 12px; border: none; border-radius: 4px; font-size: 12px; font-weight: bold; cursor: pointer; }}
+        .btn-nav {{ background: #334155; color: #f1f5f9; }}
+        .btn-nav:hover {{ background: #475569; }}
+        .btn-primary {{ background: #2563eb; color: white; }}
+        .btn-primary:hover {{ background: #1d4ed8; }}
+        .stage {{ flex: 1; width: 100%; height: calc(100vh - 42px); display: flex; justify-content: center; align-items: center; padding: 12px; overflow: hidden; }}
         svg {{ width: 100%; height: 100%; max-width: 100%; max-height: 100%; object-fit: contain; background-color: {self.bg_color}; box-shadow: 0 0 30px rgba(0, 0, 0, 0.9); }}
         text {{ user-select: none; dominant-baseline: central; }}
         .has-tag-info {{ cursor: pointer; }}
@@ -367,7 +373,6 @@ class FlattenedFTViewCompiler:
         .modal-body {{ padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }}
         .modal-body textarea {{ width: 100%; height: 140px; background: #090d16; color: #38bdf8; border: 1px solid #334155; border-radius: 6px; padding: 10px; font-family: monospace; font-size: 13px; resize: vertical; outline: none; }}
         .modal-footer {{ display: flex; justify-content: space-between; align-items: center; }}
-        .btn {{ padding: 6px 14px; border: none; border-radius: 4px; font-size: 12px; font-weight: bold; cursor: pointer; }}
         .btn-copy {{ background: #0284c7; color: white; }}
         .btn-close {{ background: #475569; color: white; }}
         #copy-status {{ color: #4ade80; font-size: 12px; display: none; }}
@@ -375,8 +380,13 @@ class FlattenedFTViewCompiler:
 </head>
 <body>
     <div id="top-bar">
-        <span><b>Screen:</b> {self.file_name} ({self.width}×{self.height})</span>
-        <div><button id="toggle-btn" onclick="toggleTagOverlay()">Toggle Tag Highlight Box</button></div>
+        <div style="display: flex; align-items: center; gap: 12px;">
+            <button class="btn btn-nav" onclick="window.pywebview.api.return_to_main()">← Back to Search Hub</button>
+            <span><b>Screen:</b> {self.file_name} ({self.width}×{self.height})</span>
+        </div>
+        <div>
+            <button id="toggle-btn" class="btn btn-primary" onclick="toggleTagOverlay()">Toggle Tag Highlight Box</button>
+        </div>
     </div>
     <div class="stage"><svg viewBox="0 0 {self.width} {self.height}" preserveAspectRatio="xMidYMid meet">{svg_content}</svg></div>
     <div id="tag-tooltip"></div>
@@ -463,37 +473,584 @@ class FlattenedFTViewCompiler:
 </html>"""
 
 
-def select_file():
-  root = tk.Tk()
-  root.withdraw()
-  root.attributes("-topmost", True)
-  file_path = filedialog.askopenfilename(
-      title="Select FactoryTalk View XML File",
-      filetypes=[("XML files", "*.xml"), ("All files", "*.*")],
-  )
-  root.destroy()
-  return file_path
+class FTViewDatabaseHub:
+
+  def __init__(self):
+    self.conn = sqlite3.connect(":memory:", check_same_thread=False)
+    self.files_cache = {}  # display_name -> bytes
+    self._init_db()
+
+  def _init_db(self):
+    cur = self.conn.cursor()
+    cur.execute("""
+            CREATE TABLE IF NOT EXISTS hmi_elements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                display_name TEXT,
+                display_normalized TEXT,
+                label_text TEXT,
+                tags TEXT
+            )
+        """)
+    self.conn.commit()
+
+  def normalize_display_name(self, name: str) -> str:
+    """Strips extension, removes - _ and non-alphanumeric characters, and converts to lowercase."""
+    base = os.path.splitext(name)[0]
+    return re.sub(r"[^a-zA-Z0-9]", "", base).lower()
+
+  def parse_and_index_xml(self, file_path: str):
+    display_name = os.path.basename(file_path)
+    with open(file_path, "rb") as f:
+      xml_bytes = f.read()
+
+    self.files_cache[display_name] = xml_bytes
+    norm_name = self.normalize_display_name(display_name)
+
+    tree = ET.parse(io.BytesIO(xml_bytes))
+    root = tree.getroot()
+
+    cur = self.conn.cursor()
+    # Delete old entries if re-indexing
+    cur.execute(
+        "DELETE FROM hmi_elements WHERE display_name = ?", (display_name,)
+    )
+
+    for elem in root.iter():
+      # 1. Extract all label texts
+      texts = []
+      cap = elem.attrib.get("caption")
+      if cap:
+        clean = (
+            cap.replace("&#xA;", "\n")
+            .replace("\r\n", "\n")
+            .strip()
+        )
+        if clean:
+          texts.append(clean)
+
+      for sub_cap in elem.findall(".//caption"):
+        sc = sub_cap.attrib.get("caption", "").strip()
+        if sc and sc not in texts:
+          texts.append(sc)
+
+      # 2. Extract full tags & expressions
+      tags = []
+      for conn in elem.findall("./connections/connection"):
+        expr = conn.attrib.get("expression")
+        if expr:
+          tags.append(expr)
+
+      for anim in elem.findall("./animations/*"):
+        expr = anim.attrib.get("expression")
+        if expr and expr not in tags:
+          tags.append(expr)
+
+      for act in elem.findall("./action"):
+        t = act.attrib.get("tag")
+        if t and t not in tags:
+          tags.append(t)
+
+      for cmd in elem.findall("./command"):
+        for attr in ("pressAction", "releaseAction"):
+          c = cmd.attrib.get(attr)
+          if c and c not in tags:
+            tags.append(c)
+
+      # Write to SQLite if there is either text or tag info
+      if texts or tags:
+        label_text_col = "\n".join(texts)
+        tags_col = " | ".join(tags)
+        cur.execute(
+            """
+                    INSERT INTO hmi_elements (display_name, display_normalized, label_text, tags)
+                    VALUES (?, ?, ?, ?)
+                """,
+            (display_name, norm_name, label_text_col, tags_col),
+        )
+
+    self.conn.commit()
+
+  def get_summary(self):
+    cur = self.conn.cursor()
+    cur.execute(
+        "SELECT COUNT(DISTINCT display_name), COUNT(*) FROM hmi_elements"
+    )
+    displays_count, elements_count = cur.fetchone()
+    return {"displays": displays_count or 0, "elements": elements_count or 0}
+
+  def search_by_display(self, query: str):
+    norm_q = self.normalize_display_name(query)
+    cur = self.conn.cursor()
+    if not norm_q:
+      cur.execute(
+          "SELECT DISTINCT display_name, display_normalized FROM hmi_elements"
+          " ORDER BY display_name"
+      )
+    else:
+      cur.execute(
+          """
+                SELECT DISTINCT display_name, display_normalized FROM hmi_elements 
+                WHERE display_normalized LIKE ? OR display_name LIKE ?
+                ORDER BY display_name
+            """,
+          (f"%{norm_q}%", f"%{query}%"),
+      )
+
+    rows = cur.fetchall()
+    return [
+        {"display_name": r[0], "display_normalized": r[1]} for r in rows
+    ]
+
+  def search_by_label(self, query: str):
+    if not query.strip():
+      return []
+    cur = self.conn.cursor()
+    cur.execute(
+        """
+            SELECT display_name, label_text, tags 
+            FROM hmi_elements 
+            WHERE label_text LIKE ? 
+            ORDER BY display_name
+        """,
+        (f"%{query}%",),
+    )
+    rows = cur.fetchall()
+    return [{"display_name": r[0], "label_text": r[1], "tags": r[2]} for r in rows]
+
+  def search_by_tag(self, query: str):
+    if not query.strip():
+      return []
+    cur = self.conn.cursor()
+    cur.execute(
+        """
+            SELECT display_name, label_text, tags 
+            FROM hmi_elements 
+            WHERE tags LIKE ? 
+            ORDER BY display_name
+        """,
+        (f"%{query}%",),
+    )
+    rows = cur.fetchall()
+    return [{"display_name": r[0], "label_text": r[1], "tags": r[2]} for r in rows]
+
+
+class DesktopAppBridge:
+
+  def __init__(self, db: FTViewDatabaseHub):
+    self.db = db
+    self.window = None
+
+  def load_files_dialog(self):
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    file_paths = filedialog.askopenfilenames(
+        title="Select FactoryTalk XML Screen Files",
+        filetypes=[("XML files", "*.xml"), ("All files", "*.*")],
+    )
+    root.destroy()
+
+    if file_paths:
+      for fp in file_paths:
+        self.db.parse_and_index_xml(fp)
+      return self.db.get_summary()
+    return None
+
+  def search_displays(self, query):
+    return self.db.search_by_display(query)
+
+  def search_labels(self, query):
+    return self.db.search_by_label(query)
+
+  def search_tags(self, query):
+    return self.db.search_by_tag(query)
+
+  def open_screen(self, display_name):
+    xml_bytes = self.db.files_cache.get(display_name)
+    if not xml_bytes:
+      return False
+
+    compiler = FlattenedFTViewCompiler(xml_bytes, display_name)
+    screen_html = compiler.compile()
+    self.window.load_html(screen_html)
+    return True
+
+  def return_to_main(self):
+    self.window.load_html(MAIN_PORTAL_HTML)
+
+
+MAIN_PORTAL_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>FactoryTalk View SE Analyzer</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background-color: #0f172a;
+            color: #f8fafc;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+        header {
+            background-color: #1e293b;
+            border-bottom: 1px solid #334155;
+            padding: 12px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        .header-title {
+            display: flex;
+            flex-direction: column;
+        }
+        .header-title h1 {
+            font-size: 18px;
+            font-weight: 700;
+            color: #38bdf8;
+            letter-spacing: -0.5px;
+        }
+        .header-title .author-badge {
+            font-size: 12px;
+            color: #94a3b8;
+            margin-top: 2px;
+        }
+        .header-title .author-badge b {
+            color: #f59e0b;
+        }
+        .btn {
+            background-color: #0284c7;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .btn:hover { background-color: #0369a1; }
+        .btn-success { background-color: #10b981; }
+        .btn-success:hover { background-color: #059669; }
+
+        .container {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+        
+        /* Sidebar Navigation */
+        .sidebar {
+            width: 220px;
+            background: #182234;
+            border-right: 1px solid #334155;
+            display: flex;
+            flex-direction: column;
+            padding: 16px 10px;
+            gap: 6px;
+        }
+        .nav-item {
+            display: flex;
+            align-items: center;
+            padding: 10px 14px;
+            border-radius: 6px;
+            color: #cbd5e1;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .nav-item:hover {
+            background-color: #243248;
+            color: #ffffff;
+        }
+        .nav-item.active {
+            background-color: #0284c7;
+            color: #ffffff;
+            font-weight: 600;
+        }
+
+        /* Content Stage */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 24px;
+            overflow-y: auto;
+        }
+        .stats-bar {
+            display: flex;
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+        .stat-card {
+            background: #1e293b;
+            border: 1px solid #334155;
+            padding: 12px 18px;
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            min-width: 160px;
+        }
+        .stat-label { font-size: 11px; text-transform: uppercase; color: #94a3b8; font-weight: 600; }
+        .stat-value { font-size: 20px; font-weight: 700; color: #38bdf8; }
+
+        .search-box-wrapper {
+            position: relative;
+            margin-bottom: 16px;
+        }
+        .search-input {
+            width: 100%;
+            padding: 12px 16px;
+            background: #1e293b;
+            border: 1px solid #475569;
+            border-radius: 8px;
+            color: #f8fafc;
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        .search-input:focus {
+            border-color: #38bdf8;
+            box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
+        }
+
+        /* Tables & Results */
+        .results-container {
+            flex: 1;
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            overflow: auto;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            text-align: left;
+        }
+        th {
+            background-color: #0f172a;
+            color: #94a3b8;
+            padding: 12px 16px;
+            font-weight: 600;
+            border-bottom: 1px solid #334155;
+            position: sticky;
+            top: 0;
+            z-index: 2;
+        }
+        td {
+            padding: 12px 16px;
+            border-bottom: 1px solid #293548;
+            color: #e2e8f0;
+            vertical-align: top;
+        }
+        tr:hover td {
+            background-color: #243248;
+        }
+        .screen-link {
+            color: #38bdf8;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: underline;
+        }
+        .screen-link:hover {
+            color: #7dd3fc;
+        }
+        .tag-pill {
+            display: inline-block;
+            background: #090d16;
+            color: #38bdf8;
+            font-family: monospace;
+            font-size: 11px;
+            padding: 3px 8px;
+            border-radius: 4px;
+            border: 1px solid #334155;
+            margin: 2px 0;
+            word-break: break-all;
+        }
+        .text-preview {
+            white-space: pre-line;
+            color: #cbd5e1;
+        }
+        .empty-state {
+            padding: 40px;
+            text-align: center;
+            color: #64748b;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="header-title">
+            <h1>FactoryTalk View SE HMI Analyzer</h1>
+            <div class="author-badge">Created by <b>Luis Castillo</b></div>
+        </div>
+        <div>
+            <button class="btn btn-success" onclick="loadFiles()">+ Load & Parse XML Files</button>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="sidebar">
+            <div class="nav-item active" id="tab-displays" onclick="switchTab('displays')">Display Names</div>
+            <div class="nav-item" id="tab-labels" onclick="switchTab('labels')">Label & Text Search</div>
+            <div class="nav-item" id="tab-tags" onclick="switchTab('tags')">PLC Tag Cross-Ref</div>
+        </div>
+
+        <div class="main-content">
+            <div class="stats-bar">
+                <div class="stat-card">
+                    <span class="stat-label">Loaded Displays</span>
+                    <span class="stat-value" id="stat-displays">0</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Indexed Elements</span>
+                    <span class="stat-value" id="stat-elements">0</span>
+                </div>
+            </div>
+
+            <div class="search-box-wrapper">
+                <input type="text" id="main-search-input" class="search-input" 
+                       placeholder="Search displays (ignores dashes, underscores, and spacing)..." 
+                       oninput="onSearchInput(this.value)">
+            </div>
+
+            <div class="results-container">
+                <table id="results-table">
+                    <thead id="table-head"></thead>
+                    <tbody id="table-body">
+                        <tr><td colspan="4" class="empty-state">No XML files loaded. Click "+ Load & Parse XML Files" to begin.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentTab = 'displays';
+
+        function switchTab(tab) {
+            currentTab = tab;
+            document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+            document.getElementById('tab-' + tab).classList.add('active');
+
+            const searchInput = document.getElementById('main-search-input');
+            if (tab === 'displays') {
+                searchInput.placeholder = "Search displays (ignores dashes, underscores, and spaces)...";
+            } else if (tab === 'labels') {
+                searchInput.placeholder = "Type text to find all screens where this caption appears...";
+            } else if (tab === 'tags') {
+                searchInput.placeholder = "Search by PLC tag e.g. /CH01/Data_1::[CH01_303] or Status...";
+            }
+            onSearchInput(searchInput.value);
+        }
+
+        async function loadFiles() {
+            const summary = await window.pywebview.api.load_files_dialog();
+            if (summary) {
+                document.getElementById('stat-displays').textContent = summary.displays;
+                document.getElementById('stat-elements').textContent = summary.elements;
+                onSearchInput(document.getElementById('main-search-input').value);
+            }
+        }
+
+        async function onSearchInput(query) {
+            const tbody = document.getElementById('table-body');
+            const thead = document.getElementById('table-head');
+
+            if (currentTab === 'displays') {
+                thead.innerHTML = `<tr><th>Display Name</th><th>Normalized Identifier</th><th>Action</th></tr>`;
+                const results = await window.pywebview.api.search_displays(query);
+                if (results.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="3" class="empty-state">No matching displays found.</td></tr>`;
+                    return;
+                }
+                tbody.innerHTML = results.map(r => `
+                    <tr>
+                        <td><b>${r.display_name}</b></td>
+                        <td style="font-family: monospace; color: #94a3b8;">${r.display_normalized}</td>
+                        <td><span class="screen-link" onclick="openScreen('${r.display_name}')">Launch Screen View →</span></td>
+                    </tr>
+                `).join('');
+
+            } else if (currentTab === 'labels') {
+                thead.innerHTML = `<tr><th>Display</th><th>Label / Caption Found</th><th>Associated Tag(s)</th></tr>`;
+                if (!query.trim()) {
+                    tbody.innerHTML = `<tr><td colspan="3" class="empty-state">Type text above to search screen labels.</td></tr>`;
+                    return;
+                }
+                const results = await window.pywebview.api.search_labels(query);
+                if (results.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="3" class="empty-state">No screens found containing "${query}".</td></tr>`;
+                    return;
+                }
+                tbody.innerHTML = results.map(r => `
+                    <tr>
+                        <td><span class="screen-link" onclick="openScreen('${r.display_name}')">${r.display_name}</span></td>
+                        <td class="text-preview">${escapeHtml(r.label_text)}</td>
+                        <td>${formatTags(r.tags)}</td>
+                    </tr>
+                `).join('');
+
+            } else if (currentTab === 'tags') {
+                thead.innerHTML = `<tr><th>Display</th><th>PLC Tag / Expression</th><th>Associated Text</th></tr>`;
+                if (!query.trim()) {
+                    tbody.innerHTML = `<tr><td colspan="3" class="empty-state">Type a tag pattern above to cross-reference displays.</td></tr>`;
+                    return;
+                }
+                const results = await window.pywebview.api.search_tags(query);
+                if (results.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="3" class="empty-state">No screens found referencing "${query}".</td></tr>`;
+                    return;
+                }
+                tbody.innerHTML = results.map(r => `
+                    <tr>
+                        <td><span class="screen-link" onclick="openScreen('${r.display_name}')">${r.display_name}</span></td>
+                        <td>${formatTags(r.tags)}</td>
+                        <td class="text-preview">${escapeHtml(r.label_text || '-')}</td>
+                    </tr>
+                `).join('');
+            }
+        }
+
+        function formatTags(tagString) {
+            if (!tagString) return '<span style="color:#64748b;">None</span>';
+            return tagString.split(' | ').map(t => `<div class="tag-pill">${escapeHtml(t)}</div>`).join('');
+        }
+
+        function escapeHtml(text) {
+            return (text || '').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        }
+
+        function openScreen(displayName) {
+            window.pywebview.api.open_screen(displayName);
+        }
+    </script>
+</body>
+</html>"""
 
 
 def main():
-  xml_path = select_file()
-  if not xml_path:
-    sys.exit(0)
+  db = FTViewDatabaseHub()
+  bridge = DesktopAppBridge(db)
 
-  file_name = os.path.basename(xml_path)
-  with open(xml_path, "rb") as f:
-    file_bytes = f.read()
-
-  compiler = FlattenedFTViewCompiler(file_bytes, file_name)
-  html_markup = compiler.compile()
-
-  webview.create_window(
-      title=f"FTView Screen Viewer - {file_name}",
-      html=html_markup,
-      width=1280,
-      height=800,
+  window = webview.create_window(
+      title="FactoryTalk View SE HMI Analyzer - Created by Luis Castillo",
+      html=MAIN_PORTAL_HTML,
+      js_api=bridge,
+      width=1360,
+      height=860,
       resizable=True,
   )
+  bridge.window = window
   webview.start()
 
 
