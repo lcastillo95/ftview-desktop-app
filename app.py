@@ -5,8 +5,6 @@ import os
 import re
 import sqlite3
 import sys
-import tkinter as tk
-from tkinter import filedialog
 import xml.etree.ElementTree as ET
 import webview
 
@@ -377,6 +375,13 @@ class FTViewDatabaseHub:
                 tags TEXT
             )
         """)
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_norm ON"
+        " hmi_elements(display_normalized)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_disp ON hmi_elements(display_name)"
+    )
     self.conn.commit()
 
   def normalize_display_name(self, name: str) -> str:
@@ -384,14 +389,11 @@ class FTViewDatabaseHub:
     return re.sub(r"[^a-zA-Z0-9]", "", base).lower()
 
   def extract_ft_tags_from_text(self, text_val: str) -> list:
-    """Finds tags matching {/CH01/...} pattern or standard expressions."""
     if not text_val:
       return []
-    # Match tags starting with {/AreaName/
     bracketed = re.findall(r"\{(\/[A-Za-z0-9_]+/[^\}]+)\}", text_val)
     if bracketed:
       return bracketed
-    # Fallback to direct path check
     if text_val.startswith("/") and "::" in text_val:
       return [text_val.strip("{}")]
     return []
@@ -412,6 +414,7 @@ class FTViewDatabaseHub:
         "DELETE FROM hmi_elements WHERE display_name = ?", (display_name,)
     )
 
+    rows_to_insert = []
     for elem in root.iter():
       texts = []
       cap = elem.attrib.get("caption")
@@ -429,7 +432,6 @@ class FTViewDatabaseHub:
         if sc and sc not in texts:
           texts.append(sc)
 
-      # Tag discovery via attributes and nodes
       tags = []
       for attr_name, attr_val in elem.attrib.items():
         if isinstance(attr_val, str):
@@ -477,13 +479,18 @@ class FTViewDatabaseHub:
       if texts or tags:
         label_text_col = "\n".join(texts)
         tags_col = " | ".join(tags)
-        cur.execute(
-            """
-                    INSERT INTO hmi_elements (display_name, display_normalized, label_text, tags)
-                    VALUES (?, ?, ?, ?)
-                """,
-            (display_name, norm_name, label_text_col, tags_col),
+        rows_to_insert.append(
+            (display_name, norm_name, label_text_col, tags_col)
         )
+
+    if rows_to_insert:
+      cur.executemany(
+          """
+                INSERT INTO hmi_elements (display_name, display_normalized, label_text, tags)
+                VALUES (?, ?, ?, ?)
+            """,
+          rows_to_insert,
+      )
 
     self.conn.commit()
 
@@ -558,15 +565,17 @@ class DesktopAppBridge:
     self.window = None
 
   def open_file_picker(self):
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-    file_paths = filedialog.askopenfilenames(
-        title="Select FactoryTalk XML Screen Files",
-        filetypes=[("XML files", "*.xml"), ("All files", "*.*")],
+    if not self.window:
+      return []
+    # Native Webview File Dialog - runs smoothly without Tkinter freeze
+    file_types = (
+        "FactoryTalk XML Files (*.xml)",
+        "All files (*.*)",
     )
-    root.destroy()
-    return list(file_paths) if file_paths else []
+    result = self.window.create_file_dialog(
+        webview.OPEN_DIALOG, allow_multiple=True, file_types=file_types
+    )
+    return list(result) if result else []
 
   def parse_single_file(self, file_path: str):
     self.db.parse_and_index_xml(file_path)
@@ -1107,7 +1116,6 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             document.getElementById('toggle-tag-btn').textContent = overlayActive ? 'Hide Tag Outlines' : 'Toggle Tag Highlight Box';
         }
 
-        // SVG Hover & Click inspection
         const tooltip = document.getElementById('viewer-tag-tooltip');
         const inspectorModal = document.getElementById('inspector-modal');
         const modalTextarea = document.getElementById('modal-tag-textarea');
