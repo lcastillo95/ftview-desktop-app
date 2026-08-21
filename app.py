@@ -1196,7 +1196,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
                         <tr><th>Display Name</th><th>Normalized Identifier</th><th>Action</th></tr>
                     </thead>
                     <tbody id="table-body">
-                        <tr><td colspan="4" class="empty-state">Loading displays...</td></tr>
+                        <tr><td colspan="3" class="empty-state">No displays indexed. Click "Load & Parse XML Files" to begin.</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -1307,30 +1307,30 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
 
         async function initApp() {
             if (isInitialized) return;
-            
-            let attempts = 0;
-            while ((!window.pywebview || !window.pywebview.api) && attempts < 60) {
-                await new Promise(r => setTimeout(r, 50));
-                attempts++;
-            }
+            if (!window.pywebview || !window.pywebview.api) return;
 
-            if (window.pywebview && window.pywebview.api) {
-                isInitialized = true;
-                try {
-                    const stats = await window.pywebview.api.get_initial_stats();
-                    if (stats) {
-                        document.getElementById('stat-displays').textContent = stats.displays;
-                        document.getElementById('stat-elements').textContent = stats.elements;
-                    }
-                    await switchTab('displays');
-                } catch (e) {
-                    console.error("Init stats error", e);
+            isInitialized = true;
+            try {
+                const stats = await window.pywebview.api.get_initial_stats();
+                if (stats) {
+                    document.getElementById('stat-displays').textContent = stats.displays;
+                    document.getElementById('stat-elements').textContent = stats.elements;
                 }
+                await performSearch('');
+            } catch (e) {
+                console.error("Init stats error", e);
             }
         }
 
+        // Poll safely for bridge initialization
+        const checkBridgeInterval = setInterval(() => {
+            if (window.pywebview && window.pywebview.api) {
+                clearInterval(checkBridgeInterval);
+                initApp();
+            }
+        }, 50);
+
         window.addEventListener('pywebviewready', initApp);
-        document.addEventListener('DOMContentLoaded', initApp);
 
         async function switchTab(tab) {
             currentTab = tab;
@@ -1351,13 +1351,13 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
                 searchInput.placeholder = "Search by PLC tag e.g. /CH01/Data_1::[CH01_042] or Status...";
                 thead.innerHTML = `<tr><th>Display</th><th>PLC Tag / Expression</th><th>Associated Text</th></tr>`;
             }
-            await onSearchInput(searchInput.value || '');
+            await performSearch(searchInput.value || '');
         }
 
         function onSearchInputDebounced(val) {
             clearTimeout(searchDebounceTimer);
             searchDebounceTimer = setTimeout(() => {
-                onSearchInput(val);
+                performSearch(val);
             }, 250);
         }
 
@@ -1388,7 +1388,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
                         document.getElementById('progress-modal').style.display = 'none';
                         document.getElementById('stat-displays').textContent = st.displays;
                         document.getElementById('stat-elements').textContent = st.elements;
-                        await onSearchInput(document.getElementById('main-search-input').value || '');
+                        await performSearch(document.getElementById('main-search-input').value || '');
                     }
                 } catch (err) {
                     console.error("Poll error", err);
@@ -1409,10 +1409,11 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             const stats = await window.pywebview.api.clear_database();
             document.getElementById('stat-displays').textContent = stats.displays;
             document.getElementById('stat-elements').textContent = stats.elements;
-            await onSearchInput('');
+            await performSearch('');
         }
 
-        async function onSearchInput(query) {
+        async function performSearch(query) {
+            if (!window.pywebview || !window.pywebview.api) return;
             const tbody = document.getElementById('table-body');
             const thead = document.getElementById('table-head');
 
@@ -1663,18 +1664,6 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
 </html>"""
 
 
-def on_window_ready(window, bridge):
-  """Called once the native webview window has fully opened."""
-  summary = bridge.db.get_summary()
-  window.evaluate_js(
-      f"if (typeof initApp === 'function') {{ initApp(); }} else {{"
-      f" document.getElementById('stat-displays').textContent ="
-      f" {summary['displays']};"
-      f" document.getElementById('stat-elements').textContent ="
-      f" {summary['elements']}; switchTab('displays'); }}"
-  )
-
-
 def main():
   db = FTViewDatabaseHub()
   bridge = DesktopAppBridge(db)
@@ -1690,7 +1679,7 @@ def main():
   )
   bridge.window = window
 
-  webview.start(on_window_ready, (window, bridge))
+  webview.start()
 
 
 if __name__ == "__main__":
