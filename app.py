@@ -107,10 +107,10 @@ class FlattenedFTViewCompiler:
     tag_attr = self._build_tag_attr(elem_tags)
 
     if tag == "multistateIndicator":
-      x = float(elem.attrib.get("left", 0))
-      y = float(elem.attrib.get("top", 0))
-      w = float(elem.attrib.get("width", 0))
-      h = float(elem.attrib.get("height", 0))
+      x = round(float(elem.attrib.get("left", 0)), 1)
+      y = round(float(elem.attrib.get("top", 0)), 1)
+      w = round(float(elem.attrib.get("width", 0)), 1)
+      h = round(float(elem.attrib.get("height", 0)), 1)
       conn = elem.find(".//connection")
       tag_expr = conn.attrib.get("expression") if conn is not None else None
       active_id = str(
@@ -167,30 +167,31 @@ class FlattenedFTViewCompiler:
           ),
           (
               f'<polyline points="{x},{y+h} {x},{y} {x+w},{y}"'
-              ' stroke="rgba(255,255,255,0.5)" stroke-width="2" fill="none"/>'
+              ' stroke="rgba(255,255,255,0.6)" stroke-width="1.5" fill="none"/>'
           ),
           (
               f'<polyline points="{x},{y+h} {x+w},{y+h} {x+w},{y}"'
-              ' stroke="rgba(0,0,0,0.5)" stroke-width="2" fill="none"/>'
+              ' stroke="rgba(0,0,0,0.6)" stroke-width="1.5" fill="none"/>'
           ),
       ]
-      total_h = len(lines) * (size + 3)
-      start_y = y + (h / 2) - (total_h / 2) + (size / 2)
+      total_h = len(lines) * (size + 4)
+      start_y = y + (h / 2) - (total_h / 2) + size
       for i, line in enumerate(lines):
-        line_y = start_y + i * (size + 3)
+        line_y = round(start_y + i * (size + 4), 1)
         out.append(
-            f'<text x="{x + w/2}" y="{line_y}" font-family="Arial"'
-            f' font-size="{size}px" font-weight="{bold}" fill="{txt_color}"'
-            f' text-anchor="middle">{html.escape(line)}</text>'
+            f'<text x="{round(x + w/2, 1)}" y="{line_y}" font-family="Segoe UI,'
+            f' Arial, sans-serif" font-size="{size}px" font-weight="{bold}"'
+            f' fill="{txt_color}" text-anchor="middle"'
+            f' text-rendering="geometricPrecision">{html.escape(line)}</text>'
         )
       out.append("</g>")
       return "".join(out)
 
     elif tag == "rectangle":
-      x = float(elem.attrib.get("left", 0))
-      y = float(elem.attrib.get("top", 0))
-      w = float(elem.attrib.get("width", 0))
-      h = float(elem.attrib.get("height", 0))
+      x = round(float(elem.attrib.get("left", 0)), 1)
+      y = round(float(elem.attrib.get("top", 0)), 1)
+      w = round(float(elem.attrib.get("width", 0)), 1)
+      h = round(float(elem.attrib.get("height", 0)), 1)
       is_trans = elem.attrib.get("backStyle") == "transparent"
       fill = "none" if is_trans else elem.attrib.get("backColor", "#FFFFFF")
       stroke = elem.attrib.get("foreColor", "none") if not is_trans else "none"
@@ -234,10 +235,10 @@ class FlattenedFTViewCompiler:
       )
 
     elif tag == "text":
-      x = float(elem.attrib.get("left", 0))
-      y = float(elem.attrib.get("top", 0))
-      w = float(elem.attrib.get("width", 0))
-      h = float(elem.attrib.get("height", 0))
+      x = round(float(elem.attrib.get("left", 0)), 1)
+      y = round(float(elem.attrib.get("top", 0)), 1)
+      w = round(float(elem.attrib.get("width", 0)), 1)
+      h = round(float(elem.attrib.get("height", 0)), 1)
       size = int(
           elem.attrib.get("fontSize") or elem.attrib.get("charHeight") or 11
       )
@@ -247,27 +248,28 @@ class FlattenedFTViewCompiler:
       color = elem.attrib.get("foreColor", "#000000")
       bold = "bold" if elem.attrib.get("bold") == "true" else "normal"
       anchor = "middle" if w > 0 else "start"
-      anchor_x = x + (w / 2 if w > 0 else 0)
+      anchor_x = round(x + (w / 2 if w > 0 else 0), 1)
 
       tspans = []
       total_h = len(lines) * (size + 3)
       start_y = (
-          (y + h / 2 - total_h / 2 + size / 2) if h > 0 else (y + size / 2)
+          (y + h / 2 - total_h / 2 + size) if h > 0 else (y + size)
       )
       for i, line in enumerate(lines):
-        line_y = start_y + i * (size + 3)
+        line_y = round(start_y + i * (size + 3), 1)
         tspans.append(
-            f'<text x="{anchor_x}" y="{line_y}" font-family="Arial"'
-            f' font-size="{size}px" font-weight="{bold}" fill="{color}"'
-            f' text-anchor="{anchor}">{html.escape(line)}</text>'
+            f'<text x="{anchor_x}" y="{line_y}" font-family="Segoe UI, Arial,'
+            f' sans-serif" font-size="{size}px" font-weight="{bold}"'
+            f' fill="{color}" text-anchor="{anchor}"'
+            f' text-rendering="geometricPrecision">{html.escape(line)}</text>'
         )
       return f"<g {tf} {tag_attr}>" + "".join(tspans) + "</g>"
 
     elif tag == "button":
-      x = float(elem.attrib.get("left", 0))
-      y = float(elem.attrib.get("top", 0))
-      w = float(elem.attrib.get("width", 0))
-      h = float(elem.attrib.get("height", 0))
+      x = round(float(elem.attrib.get("left", 0)), 1)
+      y = round(float(elem.attrib.get("top", 0)), 1)
+      w = round(float(elem.attrib.get("width", 0)), 1)
+      h = round(float(elem.attrib.get("height", 0)), 1)
       up = elem.find(".//up")
       bg = up.attrib.get("backColor", "#D4D0C8") if up is not None else "#D4D0C8"
       fg = up.attrib.get("foreColor", "#000000") if up is not None else "#000000"
@@ -292,30 +294,33 @@ class FlattenedFTViewCompiler:
               ' stroke="#404040" stroke-width="2" fill="none"/>'
           ),
       ]
-      start_y = y + h / 2 - (len(lines) * (size + 2)) / 2 + size / 2
+      start_y = y + h / 2 - (len(lines) * (size + 2)) / 2 + size
       for i, line in enumerate(lines):
         out.append(
-            f'<text x="{x + w/2}" y="{start_y + i*(size+2)}"'
-            f' font-family="Arial" font-size="{size}px" font-weight="bold"'
-            f' fill="{fg}" text-anchor="middle">{html.escape(line)}</text>'
+            f'<text x="{round(x + w/2, 1)}" y="{round(start_y + i*(size+2), 1)}"'
+            ' font-family="Segoe UI, Arial, sans-serif"'
+            f' font-size="{size}px" font-weight="bold" fill="{fg}"'
+            f' text-anchor="middle"'
+            f' text-rendering="geometricPrecision">{html.escape(line)}</text>'
         )
       out.append("</g>")
       return "".join(out)
 
     elif tag in ("numericDisplay", "stringDisplay"):
-      x = float(elem.attrib.get("left", 0))
-      y = float(elem.attrib.get("top", 0))
-      w = float(elem.attrib.get("width", 0))
-      h = float(elem.attrib.get("height", 0))
+      x = round(float(elem.attrib.get("left", 0)), 1)
+      y = round(float(elem.attrib.get("top", 0)), 1)
+      w = round(float(elem.attrib.get("width", 0)), 1)
+      h = round(float(elem.attrib.get("height", 0)), 1)
       size = int(elem.attrib.get("charHeight", 12))
       fg = elem.attrib.get("foreColor", "#000000")
       conn = elem.find(".//connection")
       expr = conn.attrib.get("expression", "") if conn is not None else ""
       val = str(self.tag_overrides.get(expr, "0.0"))
       return (
-          f'<text x="{x + w/2}" y="{y + h/2}" font-family="Arial, monospace"'
-          f' font-size="{size}px" font-weight="bold" fill="{fg}"'
-          f' text-anchor="middle" {tf} {tag_attr}>{val}</text>'
+          f'<text x="{round(x + w/2, 1)}" y="{round(y + h/2 + size/3, 1)}"'
+          ' font-family="Consolas, monospace" font-size="{size}px"'
+          f' font-weight="bold" fill="{fg}" text-anchor="middle"'
+          f' text-rendering="geometricPrecision" {tf} {tag_attr}>{val}</text>'
       )
 
     return ""
@@ -606,11 +611,19 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
     <meta charset="UTF-8">
     <title>HMIFinder</title>
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; border-radius: 0px !important; }
+        * { 
+            box-sizing: border-box; 
+            margin: 0; 
+            padding: 0; 
+            border-radius: 0px !important; 
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            text-rendering: geometricPrecision;
+        }
         body {
             background-color: #000000;
             color: #FFFFFF;
-            font-family: 'Courier New', Courier, monospace, sans-serif;
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Arial, sans-serif;
             display: flex;
             flex-direction: column;
             height: 100vh;
@@ -627,7 +640,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             z-index: 10;
         }
         .header-title { display: flex; flex-direction: column; }
-        .header-title h1 { font-size: 18px; font-weight: 700; color: #FFFFFF; letter-spacing: 1px; }
+        .header-title h1 { font-size: 17px; font-weight: 700; color: #FFFFFF; letter-spacing: 0.5px; }
         .header-title .author-badge { font-size: 12px; color: #AAAAAA; margin-top: 2px; }
         .header-title .author-badge b { color: #FFFFFF; }
         .btn {
@@ -637,9 +650,10 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             padding: 6px 14px;
             font-size: 12px;
             font-weight: 700;
-            font-family: 'Courier New', Courier, monospace;
+            font-family: 'Segoe UI', Arial, sans-serif;
             cursor: pointer;
             text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
         .btn:hover { background-color: #000000; color: #FFFFFF; }
         .btn-nav { background: #000000; color: #FFFFFF; border: 1px solid #FFFFFF; }
@@ -659,10 +673,10 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
         .nav-item {
             display: flex;
             align-items: center;
-            padding: 8px 10px;
+            padding: 8px 12px;
             color: #FFFFFF;
             font-size: 13px;
-            font-weight: 700;
+            font-weight: 600;
             border: 1px solid transparent;
             cursor: pointer;
         }
@@ -688,7 +702,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             min-width: 160px;
         }
         .stat-label { font-size: 11px; text-transform: uppercase; color: #AAAAAA; font-weight: 700; }
-        .stat-value { font-size: 18px; font-weight: 700; color: #FFFFFF; }
+        .stat-value { font-size: 18px; font-weight: 700; color: #FFFFFF; font-family: 'Consolas', monospace; }
 
         .search-box-wrapper { margin-bottom: 12px; }
         .search-input {
@@ -698,7 +712,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             border: 2px solid #FFFFFF;
             color: #FFFFFF;
             font-size: 14px;
-            font-family: 'Courier New', Courier, monospace;
+            font-family: 'Segoe UI', Arial, sans-serif;
             outline: none;
         }
         .search-input:focus { background: #111111; }
@@ -723,16 +737,9 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
         }
         td { padding: 8px 12px; border-bottom: 1px solid #333333; color: #FFFFFF; vertical-align: top; }
         
-        /* Darker alternating rows */
-        tbody tr:nth-child(even) {
-            background-color: #141414;
-        }
-        tbody tr:nth-child(odd) {
-            background-color: #000000;
-        }
-        tbody tr:hover td {
-            background-color: #262626;
-        }
+        tbody tr:nth-child(even) { background-color: #141414; }
+        tbody tr:nth-child(odd) { background-color: #000000; }
+        tbody tr:hover td { background-color: #262626; }
 
         .screen-link { color: #FFFFFF; font-weight: 700; cursor: pointer; text-decoration: underline; }
         .screen-link:hover { background-color: #FFFFFF; color: #000000; }
@@ -740,17 +747,17 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             display: inline-block;
             background: #000000;
             color: #FFFFFF;
-            font-family: 'Courier New', Courier, monospace;
+            font-family: 'Consolas', monospace;
             font-size: 11px;
             padding: 2px 6px;
             border: 1px solid #777777;
             margin: 2px 0;
             word-break: break-all;
         }
-        .text-preview { white-space: pre-line; color: #DDDDDD; }
+        .text-preview { white-space: pre-line; color: #DDDDDD; font-size: 12px; }
         .empty-state { padding: 30px; text-align: center; color: #888888; font-size: 13px; }
 
-        /* Progress Bar Modal */
+        /* Progress Modal */
         #progress-modal {
             display: none;
             position: fixed;
@@ -811,6 +818,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             padding: 10px;
             overflow: hidden;
             background: #111111;
+            position: relative;
         }
         #screen-svg-canvas {
             width: 100%;
@@ -832,11 +840,50 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             color: #FFFFFF;
             border: 1px solid #FFFFFF;
             padding: 6px 12px;
-            font-family: 'Courier New', Courier, monospace;
+            font-family: 'Consolas', monospace;
             font-size: 11px;
             display: none;
             z-index: 150;
             pointer-events: none;
+        }
+
+        /* Dedicated Loading Animation Overlay for Screen Rendering */
+        #screen-loader {
+            display: none;
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.88);
+            z-index: 200;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            gap: 16px;
+        }
+        .scanner-box {
+            width: 220px;
+            height: 28px;
+            border: 2px solid #FFFFFF;
+            position: relative;
+            background: #000000;
+            overflow: hidden;
+        }
+        .scanner-bar {
+            width: 60px;
+            height: 100%;
+            background: #FFFFFF;
+            position: absolute;
+            animation: scanAnimation 1.2s infinite ease-in-out alternate;
+        }
+        @keyframes scanAnimation {
+            0% { left: 0px; }
+            100% { left: 160px; }
+        }
+        .scanner-text {
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            color: #FFFFFF;
         }
 
         /* Inspector Modal */
@@ -876,8 +923,9 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             color: #FFFFFF;
             border: 1px solid #FFFFFF;
             padding: 8px;
-            font-family: 'Courier New', Courier, monospace;
+            font-family: 'Consolas', monospace;
             font-size: 12px;
+            line-height: 1.4;
             resize: vertical;
             outline: none;
         }
@@ -965,6 +1013,12 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
                 </div>
             </div>
             <div class="viewer-stage">
+                <div id="screen-loader">
+                    <div class="scanner-box">
+                        <div class="scanner-bar"></div>
+                    </div>
+                    <div class="scanner-text" id="loader-title">Rendering Display...</div>
+                </div>
                 <svg id="screen-svg-canvas" preserveAspectRatio="xMidYMid meet"></svg>
             </div>
         </div>
@@ -977,7 +1031,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             <div class="progress-track">
                 <div class="progress-fill" id="progress-fill"></div>
             </div>
-            <div style="display: flex; justify-content: space-between; font-size: 11px; color: #AAAAAA;">
+            <div style="display: flex; justify-content: space-between; font-size: 11px; color: #AAAAAA; font-family: 'Consolas', monospace;">
                 <span id="progress-status-file">Processing...</span>
                 <span id="progress-status-count">0 / 0</span>
             </div>
@@ -1079,7 +1133,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
                 tbody.innerHTML = results.map(r => `
                     <tr>
                         <td><b>${r.display_name}</b></td>
-                        <td style="font-family: 'Courier New', monospace; color: #AAAAAA;">${r.display_normalized}</td>
+                        <td style="font-family: 'Consolas', monospace; color: #AAAAAA;">${r.display_normalized}</td>
                         <td><span class="screen-link" onclick="openScreen('${r.display_name}')">[ Launch Screen ]</span></td>
                     </tr>
                 `).join('');
@@ -1125,16 +1179,27 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
         }
 
         async function openScreen(displayName) {
-            const data = await window.pywebview.api.get_screen_render_data(displayName);
-            if (!data) return;
-
+            const screenView = document.getElementById('screen-viewer-view');
+            const loader = document.getElementById('screen-loader');
+            const loaderTitle = document.getElementById('loader-title');
             const svg = document.getElementById('screen-svg-canvas');
-            svg.setAttribute('viewBox', `0 0 ${data.width} ${data.height}`);
-            svg.style.backgroundColor = data.bg_color;
-            svg.innerHTML = data.svg;
 
-            document.getElementById('viewer-screen-title').innerHTML = `<b>Screen:</b> ${data.file_name} (${data.width}×${data.height})`;
-            document.getElementById('screen-viewer-view').style.display = 'flex';
+            loaderTitle.textContent = `Loading ${displayName}...`;
+            svg.innerHTML = '';
+            loader.style.display = 'flex';
+            screenView.style.display = 'flex';
+
+            // Allow UI to paint the scanner animation before background rendering
+            setTimeout(async () => {
+                const data = await window.pywebview.api.get_screen_render_data(displayName);
+                if (data) {
+                    svg.setAttribute('viewBox', `0 0 ${data.width} ${data.height}`);
+                    svg.style.backgroundColor = data.bg_color;
+                    svg.innerHTML = data.svg;
+                    document.getElementById('viewer-screen-title').innerHTML = `<b>Screen:</b> ${data.file_name} (${data.width}×${data.height})`;
+                }
+                loader.style.display = 'none';
+            }, 60);
         }
 
         function closeScreenViewer() {
