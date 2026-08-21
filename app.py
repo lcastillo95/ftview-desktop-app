@@ -10,371 +10,302 @@ import xml.etree.ElementTree as ET
 import webview
 
 
+def get_app_data_path() -> str:
+    """Returns the platform-safe directory for storing persistent application data."""
+    if sys.platform == "win32":
+        base_dir = os.environ.get("APPDATA", os.path.expanduser("~"))
+    else:
+        base_dir = os.path.expanduser("~/.local/share")
+    app_dir = os.path.join(base_dir, "HMITagFinder")
+    os.makedirs(app_dir, exist_ok=True)
+    return app_dir
+
+
 class FlattenedFTViewCompiler:
+    def __init__(self, xml_bytes: bytes, file_name: str, tag_overrides: dict = None):
+        self.file_name = file_name
+        self.tree = ET.parse(io.BytesIO(xml_bytes))
+        self.root = self.tree.getroot()
+        self.tag_overrides = tag_overrides or {}
 
-  def __init__(
-      self, xml_bytes: bytes, file_name: str, tag_overrides: dict = None
-  ):
-    self.file_name = file_name
-    self.tree = ET.parse(io.BytesIO(xml_bytes))
-    self.root = self.tree.getroot()
-    self.tag_overrides = tag_overrides or {}
+        settings = self.root.find(".//displaySettings")
+        if settings is not None:
+            self.width = int(settings.attrib.get("width", 1920))
+            self.height = int(settings.attrib.get("height", 1080))
+            self.bg_color = settings.attrib.get("backColor", "#EEE7D7")
+        else:
+            self.width = 1920
+            self.height = 1080
+            self.bg_color = "#EEE7D7"
 
-    settings = self.root.find(".//displaySettings")
-    if settings is not None:
-      self.width = int(settings.attrib.get("width", 1920))
-      self.height = int(settings.attrib.get("height", 1080))
-      self.bg_color = settings.attrib.get("backColor", "#EEE7D7")
-    else:
-      self.width = 1920
-      self.height = 1080
-      self.bg_color = "#EEE7D7"
+    def _get_transform(self, elem) -> str:
+        t = elem.find("./transform")
+        if t is None:
+            return ""
+        a = t.attrib.get("scaleWidth", "1")
+        b = t.attrib.get("shearHeight", "0")
+        c = t.attrib.get("shearWidth", "0")
+        d = t.attrib.get("scaleHeight", "1")
+        e = t.attrib.get("offsetWidth", "0")
+        f = t.attrib.get("offsetHeight", "0")
+        return f'transform="matrix({a} {b} {c} {d} {e} {f})"'
 
-  def _get_transform(self, elem) -> str:
-    t = elem.find("./transform")
-    if t is None:
-      return ""
-    a = t.attrib.get("scaleWidth", "1")
-    b = t.attrib.get("shearHeight", "0")
-    c = t.attrib.get("shearWidth", "0")
-    d = t.attrib.get("scaleHeight", "1")
-    e = t.attrib.get("offsetWidth", "0")
-    f = t.attrib.get("offsetHeight", "0")
-    return f'transform="matrix({a} {b} {c} {d} {e} {f})"'
+    def _extract_local_tags(self, elem) -> list:
+        info = []
+        name = elem.attrib.get("name", "")
+        if name:
+            info.append(f"Name: {name}")
 
-  def _extract_local_tags(self, elem) -> list:
-    info = []
-    name = elem.attrib.get("name", "")
-    if name:
-      info.append(f"Name: {name}")
+        for k, v in elem.attrib.items():
+            if isinstance(v, str):
+                for tag_match in re.findall(r"\{(\/[A-Za-z0-9_]+/[^\}]+)\}", v):
+                    info.append(f"Tag: {tag_match}")
 
-    for k, v in elem.attrib.items():
-      if isinstance(v, str):
-        for tag_match in re.findall(r"\{(\/[A-Za-z0-9_]+/[^\}]+)\}", v):
-          info.append(f"Tag: {tag_match}")
+        for conn in elem.findall("./connections/connection"):
+            expr = conn.attrib.get("expression")
+            conn_name = conn.attrib.get("name", "Value")
+            if expr:
+                info.append(f"Conn ({conn_name}): {expr}")
 
-    for conn in elem.findall("./connections/connection"):
-      expr = conn.attrib.get("expression")
-      conn_name = conn.attrib.get("name", "Value")
-      if expr:
-        info.append(f"Conn ({conn_name}): {expr}")
+        for anim in elem.findall("./animations/*"):
+            anim_type = anim.tag.replace("animate", "")
+            expr = anim.attrib.get("expression")
+            rel = anim.attrib.get("releaseAction")
+            prs = anim.attrib.get("pressAction")
+            if expr:
+                info.append(f"Anim ({anim_type}): {expr}")
+            if rel:
+                info.append(f"Release: {rel}")
+            if prs:
+                info.append(f"Press: {prs}")
 
-    for anim in elem.findall("./animations/*"):
-      anim_type = anim.tag.replace("animate", "")
-      expr = anim.attrib.get("expression")
-      rel = anim.attrib.get("releaseAction")
-      prs = anim.attrib.get("pressAction")
-      if expr:
-        info.append(f"Anim ({anim_type}): {expr}")
-      if rel:
-        info.append(f"Release: {rel}")
-      if prs:
-        info.append(f"Press: {prs}")
+        for act in elem.findall("./action"):
+            t = act.attrib.get("tag")
+            act_type = act.attrib.get("type", "Action")
+            if t:
+                info.append(f"Action ({act_type}): {t}")
 
-    for act in elem.findall("./action"):
-      t = act.attrib.get("tag")
-      act_type = act.attrib.get("type", "Action")
-      if t:
-        info.append(f"Action ({act_type}): {t}")
+        for cmd in elem.findall("./command"):
+            rel = cmd.attrib.get("releaseAction")
+            prs = cmd.attrib.get("pressAction")
+            if rel:
+                info.append(f"Cmd (Release): {rel}")
+            if prs:
+                info.append(f"Cmd (Press): {prs}")
 
-    for cmd in elem.findall("./command"):
-      rel = cmd.attrib.get("releaseAction")
-      prs = cmd.attrib.get("pressAction")
-      if rel:
-        info.append(f"Cmd (Release): {rel}")
-      if prs:
-        info.append(f"Cmd (Press): {prs}")
+        return info
 
-    return info
+    def _build_tag_attr(self, tag_list: list) -> str:
+        if not tag_list:
+            return ""
+        unique = []
+        for item in tag_list:
+            if item not in unique:
+                unique.append(item)
+        escaped = html.escape(" | ".join(unique), quote=True)
+        return f' data-tag-info="{escaped}" class="has-tag-info"'
 
-  def _build_tag_attr(self, tag_list: list) -> str:
-    if not tag_list:
-      return ""
-    unique = []
-    for item in tag_list:
-      if item not in unique:
-        unique.append(item)
-    escaped = html.escape(" | ".join(unique), quote=True)
-    return f' data-tag-info="{escaped}" class="has-tag-info"'
+    def _render_primitive(self, elem, accumulated_tags: list) -> str:
+        tag = elem.tag
+        tf = self._get_transform(elem)
+        elem_tags = list(accumulated_tags)
+        for lt in self._extract_local_tags(elem):
+            if lt not in elem_tags:
+                elem_tags.append(lt)
 
-  def _render_primitive(self, elem, accumulated_tags: list) -> str:
-    tag = elem.tag
-    tf = self._get_transform(elem)
-    elem_tags = list(accumulated_tags)
-    for lt in self._extract_local_tags(elem):
-      if lt not in elem_tags:
-        elem_tags.append(lt)
+        tag_attr = self._build_tag_attr(elem_tags)
 
-    tag_attr = self._build_tag_attr(elem_tags)
+        if tag == "multistateIndicator":
+            x = round(float(elem.attrib.get("left", 0)), 1)
+            y = round(float(elem.attrib.get("top", 0)), 1)
+            w = round(float(elem.attrib.get("width", 0)), 1)
+            h = round(float(elem.attrib.get("height", 0)), 1)
+            conn = elem.find(".//connection")
+            tag_expr = conn.attrib.get("expression") if conn is not None else None
+            active_id = str(self.tag_overrides.get(tag_expr, elem.attrib.get("currentStateId", "0")))
 
-    if tag == "multistateIndicator":
-      x = round(float(elem.attrib.get("left", 0)), 1)
-      y = round(float(elem.attrib.get("top", 0)), 1)
-      w = round(float(elem.attrib.get("width", 0)), 1)
-      h = round(float(elem.attrib.get("height", 0)), 1)
-      conn = elem.find(".//connection")
-      tag_expr = conn.attrib.get("expression") if conn is not None else None
-      active_id = str(
-          self.tag_overrides.get(
-              tag_expr, elem.attrib.get("currentStateId", "0")
-          )
-      )
+            matched_state = None
+            for s in elem.findall(".//state"):
+                if s.attrib.get("stateId") == active_id or s.attrib.get("value") == active_id:
+                    matched_state = s
+                    break
+            if matched_state is None:
+                matched_state = elem.find(".//state")
 
-      matched_state = None
-      for s in elem.findall(".//state"):
-        if (
-            s.attrib.get("stateId") == active_id
-            or s.attrib.get("value") == active_id
-        ):
-          matched_state = s
-          break
-      if matched_state is None:
-        matched_state = elem.find(".//state")
+            bg = matched_state.attrib.get("backColor", "navy") if matched_state is not None else "navy"
+            cap_node = matched_state.find(".//caption") if matched_state is not None else None
+            raw_text = cap_node.attrib.get("caption", "") if cap_node is not None else ""
+            txt_color = cap_node.attrib.get("color", "white") if cap_node is not None else "white"
+            size = int(cap_node.attrib.get("fontSize", 10)) if cap_node is not None else 10
+            bold = "bold" if cap_node is not None and cap_node.attrib.get("bold") == "true" else "normal"
 
-      bg = (
-          matched_state.attrib.get("backColor", "navy")
-          if matched_state is not None
-          else "navy"
-      )
-      cap_node = (
-          matched_state.find(".//caption") if matched_state is not None else None
-      )
-      raw_text = (
-          cap_node.attrib.get("caption", "") if cap_node is not None else ""
-      )
-      txt_color = (
-          cap_node.attrib.get("color", "white")
-          if cap_node is not None
-          else "white"
-      )
-      size = (
-          int(cap_node.attrib.get("fontSize", 10))
-          if cap_node is not None
-          else 10
-      )
-      bold = (
-          "bold"
-          if cap_node is not None and cap_node.attrib.get("bold") == "true"
-          else "normal"
-      )
+            clean_text = raw_text.replace("&#xA;", "\n").replace("\r\n", "\n")
+            lines = clean_text.split("\n")
+            out = [
+                f'<g {tf} {tag_attr}>',
+                f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{bg}" stroke="#000000" stroke-width="1"/>',
+                f'<polyline points="{x},{y+h} {x},{y} {x+w},{y}" stroke="rgba(255,255,255,0.6)" stroke-width="1.5" fill="none"/>',
+                f'<polyline points="{x},{y+h} {x+w},{y+h} {x+w},{y}" stroke="rgba(0,0,0,0.6)" stroke-width="1.5" fill="none"/>'
+            ]
+            total_h = len(lines) * (size + 4)
+            start_y = y + (h / 2) - (total_h / 2) + size
+            for i, line in enumerate(lines):
+                line_y = round(start_y + i * (size + 4), 1)
+                out.append(
+                    f'<text x="{round(x + w/2, 1)}" y="{line_y}" font-family="Segoe UI, Arial, sans-serif" '
+                    f'font-size="{size}px" font-weight="{bold}" fill="{txt_color}" text-anchor="middle" '
+                    f'text-rendering="geometricPrecision">{html.escape(line)}</text>'
+                )
+            out.append("</g>")
+            return "".join(out)
 
-      clean_text = raw_text.replace("&#xA;", "\n").replace("\r\n", "\n")
-      lines = clean_text.split("\n")
-      out = [
-          f"<g {tf} {tag_attr}>",
-          (
-              f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{bg}"'
-              ' stroke="#000000" stroke-width="1"/>'
-          ),
-          (
-              f'<polyline points="{x},{y+h} {x},{y} {x+w},{y}"'
-              ' stroke="rgba(255,255,255,0.6)" stroke-width="1.5" fill="none"/>'
-          ),
-          (
-              f'<polyline points="{x},{y+h} {x+w},{y+h} {x+w},{y}"'
-              ' stroke="rgba(0,0,0,0.6)" stroke-width="1.5" fill="none"/>'
-          ),
-      ]
-      total_h = len(lines) * (size + 4)
-      start_y = y + (h / 2) - (total_h / 2) + size
-      for i, line in enumerate(lines):
-        line_y = round(start_y + i * (size + 4), 1)
-        out.append(
-            f'<text x="{round(x + w/2, 1)}" y="{line_y}" font-family="Segoe UI,'
-            f' Arial, sans-serif" font-size="{size}px" font-weight="{bold}"'
-            f' fill="{txt_color}" text-anchor="middle"'
-            f' text-rendering="geometricPrecision">{html.escape(line)}</text>'
-        )
-      out.append("</g>")
-      return "".join(out)
+        elif tag == "rectangle":
+            x = round(float(elem.attrib.get("left", 0)), 1)
+            y = round(float(elem.attrib.get("top", 0)), 1)
+            w = round(float(elem.attrib.get("width", 0)), 1)
+            h = round(float(elem.attrib.get("height", 0)), 1)
+            is_trans = elem.attrib.get("backStyle") == "transparent"
+            fill = "none" if is_trans else elem.attrib.get("backColor", "#FFFFFF")
+            stroke = elem.attrib.get("foreColor", "none") if not is_trans else "none"
+            lw = elem.attrib.get("lineWidth", "1")
+            return f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{fill}" stroke="{stroke}" stroke-width="{lw}" {tf} {tag_attr}/>'
 
-    elif tag == "rectangle":
-      x = round(float(elem.attrib.get("left", 0)), 1)
-      y = round(float(elem.attrib.get("top", 0)), 1)
-      w = round(float(elem.attrib.get("width", 0)), 1)
-      h = round(float(elem.attrib.get("height", 0)), 1)
-      is_trans = elem.attrib.get("backStyle") == "transparent"
-      fill = "none" if is_trans else elem.attrib.get("backColor", "#FFFFFF")
-      stroke = elem.attrib.get("foreColor", "none") if not is_trans else "none"
-      lw = elem.attrib.get("lineWidth", "1")
-      return (
-          f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{fill}"'
-          f' stroke="{stroke}" stroke-width="{lw}" {tf} {tag_attr}/>'
-      )
+        elif tag == "line":
+            pts = elem.attrib.get("line", "").strip().split()
+            if len(pts) >= 4:
+                stroke = elem.attrib.get("backColor") or elem.attrib.get("foreColor") or "#000000"
+                lw = elem.attrib.get("lineWidth", "1")
+                return f'<line x1="{pts[0]}" y1="{pts[1]}" x2="{pts[2]}" y2="{pts[3]}" stroke="{stroke}" stroke-width="{lw}" stroke-linecap="square" {tf} {tag_attr}/>'
 
-    elif tag == "line":
-      pts = elem.attrib.get("line", "").strip().split()
-      if len(pts) >= 4:
-        stroke = (
-            elem.attrib.get("backColor")
-            or elem.attrib.get("foreColor")
-            or "#000000"
-        )
-        lw = elem.attrib.get("lineWidth", "1")
-        return (
-            f'<line x1="{pts[0]}" y1="{pts[1]}" x2="{pts[2]}" y2="{pts[3]}"'
-            f' stroke="{stroke}" stroke-width="{lw}" stroke-linecap="square"'
-            f" {tf} {tag_attr}/>"
-        )
+        elif tag in ("polygon", "polyline"):
+            raw = elem.attrib.get("path", "").strip().split()
+            coords = " ".join([f"{raw[i]},{raw[i+1]}" for i in range(0, len(raw) - 1, 2)])
+            fill = elem.attrib.get("backColor", "#999999") if tag == "polygon" else "none"
+            stroke = elem.attrib.get("foreColor", "#000000")
+            lw = elem.attrib.get("lineWidth", "1")
+            tag_name = "polygon" if tag == "polygon" else "polyline"
+            return f'<{tag_name} points="{coords}" fill="{fill}" stroke="{stroke}" stroke-width="{lw}" {tf} {tag_attr}/>'
 
-    elif tag in ("polygon", "polyline"):
-      raw = elem.attrib.get("path", "").strip().split()
-      coords = " ".join(
-          [f"{raw[i]},{raw[i+1]}" for i in range(0, len(raw) - 1, 2)]
-      )
-      fill = (
-          elem.attrib.get("backColor", "#999999")
-          if tag == "polygon"
-          else "none"
-      )
-      stroke = elem.attrib.get("foreColor", "#000000")
-      lw = elem.attrib.get("lineWidth", "1")
-      tag_name = "polygon" if tag == "polygon" else "polyline"
-      return (
-          f'<{tag_name} points="{coords}" fill="{fill}" stroke="{stroke}"'
-          f' stroke-width="{lw}" {tf} {tag_attr}/>'
-      )
+        elif tag == "text":
+            x = round(float(elem.attrib.get("left", 0)), 1)
+            y = round(float(elem.attrib.get("top", 0)), 1)
+            w = round(float(elem.attrib.get("width", 0)), 1)
+            h = round(float(elem.attrib.get("height", 0)), 1)
+            size = int(elem.attrib.get("fontSize") or elem.attrib.get("charHeight") or 11)
+            raw_text = elem.attrib.get("caption", "")
+            clean_text = raw_text.replace("&#xA;", "\n").replace("\r\n", "\n")
+            lines = clean_text.split("\n")
+            color = elem.attrib.get("foreColor", "#000000")
+            bold = "bold" if elem.attrib.get("bold") == "true" else "normal"
+            anchor = "middle" if w > 0 else "start"
+            anchor_x = round(x + (w / 2 if w > 0 else 0), 1)
 
-    elif tag == "text":
-      x = round(float(elem.attrib.get("left", 0)), 1)
-      y = round(float(elem.attrib.get("top", 0)), 1)
-      w = round(float(elem.attrib.get("width", 0)), 1)
-      h = round(float(elem.attrib.get("height", 0)), 1)
-      size = int(
-          elem.attrib.get("fontSize") or elem.attrib.get("charHeight") or 11
-      )
-      raw_text = elem.attrib.get("caption", "")
-      clean_text = raw_text.replace("&#xA;", "\n").replace("\r\n", "\n")
-      lines = clean_text.split("\n")
-      color = elem.attrib.get("foreColor", "#000000")
-      bold = "bold" if elem.attrib.get("bold") == "true" else "normal"
-      anchor = "middle" if w > 0 else "start"
-      anchor_x = round(x + (w / 2 if w > 0 else 0), 1)
+            tspans = []
+            total_h = len(lines) * (size + 3)
+            start_y = (y + h / 2 - total_h / 2 + size) if h > 0 else (y + size)
+            for i, line in enumerate(lines):
+                line_y = round(start_y + i * (size + 3), 1)
+                tspans.append(
+                    f'<text x="{anchor_x}" y="{line_y}" font-family="Segoe UI, Arial, sans-serif" '
+                    f'font-size="{size}px" font-weight="{bold}" fill="{color}" text-anchor="{anchor}" '
+                    f'text-rendering="geometricPrecision">{html.escape(line)}</text>'
+                )
+            return f"<g {tf} {tag_attr}>" + "".join(tspans) + "</g>"
 
-      tspans = []
-      total_h = len(lines) * (size + 3)
-      start_y = (
-          (y + h / 2 - total_h / 2 + size) if h > 0 else (y + size)
-      )
-      for i, line in enumerate(lines):
-        line_y = round(start_y + i * (size + 3), 1)
-        tspans.append(
-            f'<text x="{anchor_x}" y="{line_y}" font-family="Segoe UI, Arial,'
-            f' sans-serif" font-size="{size}px" font-weight="{bold}"'
-            f' fill="{color}" text-anchor="{anchor}"'
-            f' text-rendering="geometricPrecision">{html.escape(line)}</text>'
-        )
-      return f"<g {tf} {tag_attr}>" + "".join(tspans) + "</g>"
+        elif tag == "button":
+            x = round(float(elem.attrib.get("left", 0)), 1)
+            y = round(float(elem.attrib.get("top", 0)), 1)
+            w = round(float(elem.attrib.get("width", 0)), 1)
+            h = round(float(elem.attrib.get("height", 0)), 1)
+            up = elem.find(".//up")
+            bg = up.attrib.get("backColor", "#D4D0C8") if up is not None else "#D4D0C8"
+            fg = up.attrib.get("foreColor", "#000000") if up is not None else "#000000"
+            cap_elem = elem.find(".//caption")
+            raw_cap = cap_elem.attrib.get("caption", "") if cap_elem is not None else ""
+            clean_cap = raw_cap.replace("&#xA;", "\n").replace("\r\n", "\n")
+            size = int(cap_elem.attrib.get("fontSize", 10)) if cap_elem is not None else 10
+            lines = clean_cap.split("\n")
+            out = [
+                f'<g class="hmi-button" {tf} {tag_attr}>',
+                f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{bg}"/>',
+                f'<polyline points="{x},{y+h} {x},{y} {x+w},{y}" stroke="#FFFFFF" stroke-width="2" fill="none"/>',
+                f'<polyline points="{x},{y+h} {x+w},{y+h} {x+w},{y}" stroke="#404040" stroke-width="2" fill="none"/>'
+            ]
+            start_y = y + h / 2 - (len(lines) * (size + 2)) / 2 + size
+            for i, line in enumerate(lines):
+                out.append(
+                    f'<text x="{round(x + w/2, 1)}" y="{round(start_y + i*(size+2), 1)}" '
+                    f'font-family="Segoe UI, Arial, sans-serif" font-size="{size}px" font-weight="bold" '
+                    f'fill="{fg}" text-anchor="middle" text-rendering="geometricPrecision">{html.escape(line)}</text>'
+                )
+            out.append("</g>")
+            return "".join(out)
 
-    elif tag == "button":
-      x = round(float(elem.attrib.get("left", 0)), 1)
-      y = round(float(elem.attrib.get("top", 0)), 1)
-      w = round(float(elem.attrib.get("width", 0)), 1)
-      h = round(float(elem.attrib.get("height", 0)), 1)
-      up = elem.find(".//up")
-      bg = up.attrib.get("backColor", "#D4D0C8") if up is not None else "#D4D0C8"
-      fg = up.attrib.get("foreColor", "#000000") if up is not None else "#000000"
-      cap_elem = elem.find(".//caption")
-      raw_cap = cap_elem.attrib.get("caption", "") if cap_elem is not None else ""
-      clean_cap = raw_cap.replace("&#xA;", "\n").replace("\r\n", "\n")
-      size = (
-          int(cap_elem.attrib.get("fontSize", 10))
-          if cap_elem is not None
-          else 10
-      )
-      lines = clean_cap.split("\n")
-      out = [
-          f'<g class="hmi-button" {tf} {tag_attr}>',
-          f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{bg}"/>',
-          (
-              f'<polyline points="{x},{y+h} {x},{y} {x+w},{y}" stroke="#FFFFFF"'
-              ' stroke-width="2" fill="none"/>'
-          ),
-          (
-              f'<polyline points="{x},{y+h} {x+w},{y+h} {x+w},{y}"'
-              ' stroke="#404040" stroke-width="2" fill="none"/>'
-          ),
-      ]
-      start_y = y + h / 2 - (len(lines) * (size + 2)) / 2 + size
-      for i, line in enumerate(lines):
-        out.append(
-            f'<text x="{round(x + w/2, 1)}" y="{round(start_y + i*(size+2), 1)}"'
-            ' font-family="Segoe UI, Arial, sans-serif"'
-            f' font-size="{size}px" font-weight="bold" fill="{fg}"'
-            f' text-anchor="middle"'
-            f' text-rendering="geometricPrecision">{html.escape(line)}</text>'
-        )
-      out.append("</g>")
-      return "".join(out)
+        elif tag in ("numericDisplay", "stringDisplay"):
+            x = round(float(elem.attrib.get("left", 0)), 1)
+            y = round(float(elem.attrib.get("top", 0)), 1)
+            w = round(float(elem.attrib.get("width", 0)), 1)
+            h = round(float(elem.attrib.get("height", 0)), 1)
+            size = int(elem.attrib.get("charHeight", 12))
+            fg = elem.attrib.get("foreColor", "#000000")
+            conn = elem.find(".//connection")
+            expr = conn.attrib.get("expression", "") if conn is not None else ""
+            val = str(self.tag_overrides.get(expr, "0.0"))
+            return (
+                f'<text x="{round(x + w/2, 1)}" y="{round(y + h/2 + size/3, 1)}" '
+                f'font-family="Consolas, monospace" font-size="{size}px" font-weight="bold" '
+                f'fill="{fg}" text-anchor="middle" text-rendering="geometricPrecision" {tf} {tag_attr}>{val}</text>'
+            )
 
-    elif tag in ("numericDisplay", "stringDisplay"):
-      x = round(float(elem.attrib.get("left", 0)), 1)
-      y = round(float(elem.attrib.get("top", 0)), 1)
-      w = round(float(elem.attrib.get("width", 0)), 1)
-      h = round(float(elem.attrib.get("height", 0)), 1)
-      size = int(elem.attrib.get("charHeight", 12))
-      fg = elem.attrib.get("foreColor", "#000000")
-      conn = elem.find(".//connection")
-      expr = conn.attrib.get("expression", "") if conn is not None else ""
-      val = str(self.tag_overrides.get(expr, "0.0"))
-      return (
-          f'<text x="{round(x + w/2, 1)}" y="{round(y + h/2 + size/3, 1)}"'
-          ' font-family="Consolas, monospace" font-size="{size}px"'
-          f' font-weight="bold" fill="{fg}" text-anchor="middle"'
-          f' text-rendering="geometricPrecision" {tf} {tag_attr}>{val}</text>'
-      )
+        return ""
 
-    return ""
+    def _flatten_and_render(self, node, accumulated_tags: list) -> list:
+        rendered_elements = []
+        if node.tag in ("displaySettings", "vbaProject", "animations", "connections", "transform"):
+            return rendered_elements
+        current_tags = list(accumulated_tags)
+        for lt in self._extract_local_tags(node):
+            if lt not in current_tags:
+                current_tags.append(lt)
 
-  def _flatten_and_render(self, node, accumulated_tags: list) -> list:
-    rendered_elements = []
-    if node.tag in (
-        "displaySettings",
-        "vbaProject",
-        "animations",
-        "connections",
-        "transform",
-    ):
-      return rendered_elements
-    current_tags = list(accumulated_tags)
-    for lt in self._extract_local_tags(node):
-      if lt not in current_tags:
-        current_tags.append(lt)
+        if node.tag == "group":
+            for child in node:
+                rendered_elements.extend(self._flatten_and_render(child, current_tags))
+        else:
+            svg_markup = self._render_primitive(node, current_tags)
+            if svg_markup:
+                rendered_elements.append(svg_markup)
+        return rendered_elements
 
-    if node.tag == "group":
-      for child in node:
-        rendered_elements.extend(self._flatten_and_render(child, current_tags))
-    else:
-      svg_markup = self._render_primitive(node, current_tags)
-      if svg_markup:
-        rendered_elements.append(svg_markup)
-    return rendered_elements
-
-  def compile_svg_bundle(self) -> dict:
-    all_primitives = []
-    for child in self.root:
-      all_primitives.extend(self._flatten_and_render(child, []))
-    return {
-        "svg": "\n  ".join(all_primitives),
-        "width": self.width,
-        "height": self.height,
-        "bg_color": self.bg_color,
-        "file_name": self.file_name,
-    }
+    def compile_svg_bundle(self) -> dict:
+        all_primitives = []
+        for child in self.root:
+            all_primitives.extend(self._flatten_and_render(child, []))
+        return {
+            "svg": "\n  ".join(all_primitives),
+            "width": self.width,
+            "height": self.height,
+            "bg_color": self.bg_color,
+            "file_name": self.file_name,
+        }
 
 
 class FTViewDatabaseHub:
+    def __init__(self):
+        self.lock = threading.Lock()
+        app_dir = get_app_data_path()
+        self.db_path = os.path.join(app_dir, "hmitagfinder.db")
+        
+        # Connect to persistent local database with WAL mode and multi-instance concurrency
+        self.conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30.0)
+        self.conn.execute("PRAGMA journal_mode=WAL;")
+        self.conn.execute("PRAGMA synchronous=NORMAL;")
+        self._init_db()
 
-  def __init__(self):
-    self.lock = threading.Lock()
-    self.conn = sqlite3.connect(":memory:", check_same_thread=False)
-    self.files_cache = {}
-    self._init_db()
-
-  def _init_db(self):
-    with self.lock:
-      cur = self.conn.cursor()
-      cur.execute("""
+    def _init_db(self):
+        with self.lock:
+            cur = self.conn.cursor()
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS hmi_elements (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     display_name TEXT,
@@ -383,247 +314,257 @@ class FTViewDatabaseHub:
                     tags TEXT
                 )
             """)
-      cur.execute(
-          "CREATE INDEX IF NOT EXISTS idx_norm ON"
-          " hmi_elements(display_normalized)"
-      )
-      cur.execute(
-          "CREATE INDEX IF NOT EXISTS idx_disp ON hmi_elements(display_name)"
-      )
-      self.conn.commit()
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS display_files (
+                    display_name TEXT PRIMARY KEY,
+                    xml_bytes BLOB
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_norm ON hmi_elements(display_normalized)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_disp ON hmi_elements(display_name)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_lbl ON hmi_elements(label_text)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_tags ON hmi_elements(tags)")
+            self.conn.commit()
 
-  def normalize_display_name(self, name: str) -> str:
-    base = os.path.splitext(name)[0]
-    return re.sub(r"[^a-zA-Z0-9]", "", base).lower()
+    def normalize_display_name(self, name: str) -> str:
+        base = os.path.splitext(name)[0]
+        return re.sub(r"[^a-zA-Z0-9]", "", base).lower()
 
-  def extract_ft_tags_from_text(self, text_val: str) -> list:
-    if not text_val:
-      return []
-    bracketed = re.findall(r"\{(\/[A-Za-z0-9_]+/[^\}]+)\}", text_val)
-    if bracketed:
-      return bracketed
-    if text_val.startswith("/") and "::" in text_val:
-      return [text_val.strip("{}")]
-    return []
+    def extract_ft_tags_from_text(self, text_val: str) -> list:
+        if not text_val:
+            return []
+        bracketed = re.findall(r"\{(\/[A-Za-z0-9_]+/[^\}]+)\}", text_val)
+        if bracketed:
+            return bracketed
+        if text_val.startswith("/") and "::" in text_val:
+            return [text_val.strip("{}")]
+        return []
 
-  def parse_and_index_xml(self, file_path: str):
-    display_name = os.path.basename(file_path)
-    with open(file_path, "rb") as f:
-      xml_bytes = f.read()
+    def parse_and_index_xml(self, file_path: str):
+        display_name = os.path.basename(file_path)
+        with open(file_path, "rb") as f:
+            xml_bytes = f.read()
 
-    with self.lock:
-      self.files_cache[display_name] = xml_bytes
+        norm_name = self.normalize_display_name(display_name)
+        tree = ET.parse(io.BytesIO(xml_bytes))
+        root = tree.getroot()
 
-    norm_name = self.normalize_display_name(display_name)
-    tree = ET.parse(io.BytesIO(xml_bytes))
-    root = tree.getroot()
+        rows_to_insert = []
+        for elem in root.iter():
+            texts = []
+            cap = elem.attrib.get("caption")
+            if cap:
+                clean = cap.replace("&#xA;", "\n").replace("\r\n", "\n").strip()
+                if clean:
+                    texts.append(clean)
 
-    rows_to_insert = []
-    for elem in root.iter():
-      texts = []
-      cap = elem.attrib.get("caption")
-      if cap:
-        clean = (
-            cap.replace("&#xA;", "\n")
-            .replace("\r\n", "\n")
-            .strip()
-        )
-        if clean:
-          texts.append(clean)
+            for sub_cap in elem.findall(".//caption"):
+                sc = sub_cap.attrib.get("caption", "").strip()
+                if sc and sc not in texts:
+                    texts.append(sc)
 
-      for sub_cap in elem.findall(".//caption"):
-        sc = sub_cap.attrib.get("caption", "").strip()
-        if sc and sc not in texts:
-          texts.append(sc)
+            tags = []
+            for attr_name, attr_val in elem.attrib.items():
+                if isinstance(attr_val, str):
+                    for t in self.extract_ft_tags_from_text(attr_val):
+                        if t not in tags:
+                            tags.append(t)
 
-      tags = []
-      for attr_name, attr_val in elem.attrib.items():
-        if isinstance(attr_val, str):
-          for t in self.extract_ft_tags_from_text(attr_val):
-            if t not in tags:
-              tags.append(t)
+            for conn in elem.findall("./connections/connection"):
+                expr = conn.attrib.get("expression")
+                if expr:
+                    extracted = self.extract_ft_tags_from_text(expr)
+                    if extracted:
+                        tags.extend([x for x in extracted if x not in tags])
+                    elif expr not in tags:
+                        tags.append(expr)
 
-      for conn in elem.findall("./connections/connection"):
-        expr = conn.attrib.get("expression")
-        if expr:
-          extracted = self.extract_ft_tags_from_text(expr)
-          if extracted:
-            tags.extend([x for x in extracted if x not in tags])
-          elif expr not in tags:
-            tags.append(expr)
+            for anim in elem.findall("./animations/*"):
+                expr = anim.attrib.get("expression")
+                if expr:
+                    extracted = self.extract_ft_tags_from_text(expr)
+                    if extracted:
+                        tags.extend([x for x in extracted if x not in tags])
+                    elif expr not in tags:
+                        tags.append(expr)
 
-      for anim in elem.findall("./animations/*"):
-        expr = anim.attrib.get("expression")
-        if expr:
-          extracted = self.extract_ft_tags_from_text(expr)
-          if extracted:
-            tags.extend([x for x in extracted if x not in tags])
-          elif expr not in tags:
-            tags.append(expr)
+            for act in elem.findall("./action"):
+                t = act.attrib.get("tag")
+                if t:
+                    extracted = self.extract_ft_tags_from_text(t)
+                    if extracted:
+                        tags.extend([x for x in extracted if x not in tags])
+                    elif t not in tags:
+                        tags.append(t)
 
-      for act in elem.findall("./action"):
-        t = act.attrib.get("tag")
-        if t:
-          extracted = self.extract_ft_tags_from_text(t)
-          if extracted:
-            tags.extend([x for x in extracted if x not in tags])
-          elif t not in tags:
-            tags.append(t)
+            for cmd in elem.findall("./command"):
+                for attr in ("pressAction", "releaseAction"):
+                    c = cmd.attrib.get(attr)
+                    if c:
+                        extracted = self.extract_ft_tags_from_text(c)
+                        if extracted:
+                            tags.extend([x for x in extracted if x not in tags])
+                        elif c not in tags:
+                            tags.append(c)
 
-      for cmd in elem.findall("./command"):
-        for attr in ("pressAction", "releaseAction"):
-          c = cmd.attrib.get(attr)
-          if c:
-            extracted = self.extract_ft_tags_from_text(c)
-            if extracted:
-              tags.extend([x for x in extracted if x not in tags])
-            elif c not in tags:
-              tags.append(c)
+            if texts or tags:
+                label_text_col = "\n".join(texts)
+                tags_col = " | ".join(tags)
+                rows_to_insert.append((display_name, norm_name, label_text_col, tags_col))
 
-      if texts or tags:
-        label_text_col = "\n".join(texts)
-        tags_col = " | ".join(tags)
-        rows_to_insert.append(
-            (display_name, norm_name, label_text_col, tags_col)
-        )
-
-    with self.lock:
-      cur = self.conn.cursor()
-      cur.execute(
-          "DELETE FROM hmi_elements WHERE display_name = ?", (display_name,)
-      )
-      if rows_to_insert:
-        cur.executemany(
-            """
+        with self.lock:
+            cur = self.conn.cursor()
+            # Store raw XML payload persistently
+            cur.execute("INSERT OR REPLACE INTO display_files (display_name, xml_bytes) VALUES (?, ?)", (display_name, xml_bytes))
+            cur.execute("DELETE FROM hmi_elements WHERE display_name = ?", (display_name,))
+            if rows_to_insert:
+                cur.executemany(
+                    """
                     INSERT INTO hmi_elements (display_name, display_normalized, label_text, tags)
                     VALUES (?, ?, ?, ?)
-                """,
-            rows_to_insert,
-        )
-      self.conn.commit()
+                    """,
+                    rows_to_insert,
+                )
+            self.conn.commit()
 
-  def get_summary(self):
-    with self.lock:
-      cur = self.conn.cursor()
-      cur.execute(
-          "SELECT COUNT(DISTINCT display_name), COUNT(*) FROM hmi_elements"
-      )
-      displays_count, elements_count = cur.fetchone()
-      return {"displays": displays_count or 0, "elements": elements_count or 0}
+    def get_xml_bytes(self, display_name: str) -> bytes:
+        with self.lock:
+            cur = self.conn.cursor()
+            cur.execute("SELECT xml_bytes FROM display_files WHERE display_name = ?", (display_name,))
+            row = cur.fetchone()
+            return row[0] if row else None
 
-  def search_by_display(self, query: str):
-    norm_q = self.normalize_display_name(query)
-    with self.lock:
-      cur = self.conn.cursor()
-      if not norm_q:
-        cur.execute(
-            "SELECT DISTINCT display_name, display_normalized FROM hmi_elements"
-            " ORDER BY display_name LIMIT 60"
-        )
-      else:
-        cur.execute(
-            """
+    def get_summary(self):
+        with self.lock:
+            cur = self.conn.cursor()
+            cur.execute("SELECT COUNT(DISTINCT display_name), COUNT(*) FROM hmi_elements")
+            displays_count, elements_count = cur.fetchone()
+            return {"displays": displays_count or 0, "elements": elements_count or 0}
+
+    def clear_database(self):
+        with self.lock:
+            cur = self.conn.cursor()
+            cur.execute("DELETE FROM hmi_elements;")
+            cur.execute("DELETE FROM display_files;")
+            self.conn.commit()
+            return {"displays": 0, "elements": 0}
+
+    def search_by_display(self, query: str):
+        norm_q = self.normalize_display_name(query)
+        with self.lock:
+            cur = self.conn.cursor()
+            if not norm_q:
+                cur.execute(
+                    "SELECT DISTINCT display_name, display_normalized FROM hmi_elements ORDER BY display_name LIMIT 60"
+                )
+            else:
+                cur.execute(
+                    """
                     SELECT DISTINCT display_name, display_normalized FROM hmi_elements 
                     WHERE display_normalized LIKE ? OR display_name LIKE ?
                     ORDER BY display_name LIMIT 60
-                """,
-            (f"%{norm_q}%", f"%{query}%"),
-        )
-      rows = cur.fetchall()
-    return [
-        {"display_name": r[0], "display_normalized": r[1]} for r in rows
-    ]
+                    """,
+                    (f"%{norm_q}%", f"%{query}%"),
+                )
+            rows = cur.fetchall()
+        return [{"display_name": r[0], "display_normalized": r[1]} for r in rows]
 
-  def search_by_label(self, query: str):
-    if not query.strip():
-      return []
-    with self.lock:
-      cur = self.conn.cursor()
-      cur.execute(
-          """
+    def search_by_label(self, query: str):
+        if not query.strip():
+            return []
+        with self.lock:
+            cur = self.conn.cursor()
+            cur.execute(
+                """
                 SELECT display_name, label_text, tags 
                 FROM hmi_elements 
                 WHERE label_text LIKE ? 
                 ORDER BY display_name LIMIT 60
-            """,
-          (f"%{query}%",),
-      )
-      rows = cur.fetchall()
-    return [{"display_name": r[0], "label_text": r[1], "tags": r[2]} for r in rows]
+                """,
+                (f"%{query}%",),
+            )
+            rows = cur.fetchall()
+        return [{"display_name": r[0], "label_text": r[1], "tags": r[2]} for r in rows]
 
-  def search_by_tag(self, query: str):
-    if not query.strip():
-      return []
-    with self.lock:
-      cur = self.conn.cursor()
-      cur.execute(
-          """
+    def search_by_tag(self, query: str):
+        if not query.strip():
+            return []
+        with self.lock:
+            cur = self.conn.cursor()
+            cur.execute(
+                """
                 SELECT display_name, label_text, tags 
                 FROM hmi_elements 
                 WHERE tags LIKE ? 
                 ORDER BY display_name LIMIT 60
-            """,
-          (f"%{query}%",),
-      )
-      rows = cur.fetchall()
-    return [{"display_name": r[0], "label_text": r[1], "tags": r[2]} for r in rows]
+                """,
+                (f"%{query}%",),
+            )
+            rows = cur.fetchall()
+        return [{"display_name": r[0], "label_text": r[1], "tags": r[2]} for r in rows]
 
 
 class DesktopAppBridge:
+    def __init__(self, db: FTViewDatabaseHub):
+        self.db = db
+        self.window = None
 
-  def __init__(self, db: FTViewDatabaseHub):
-    self.db = db
-    self.window = None
+    def start_batch_import(self):
+        if not self.window:
+            return
 
-  def start_batch_import(self):
-    if not self.window:
-      return
-
-    file_types = ("FactoryTalk XML Files (*.xml)", "All files (*.*)")
-    result = self.window.create_file_dialog(
-        webview.OPEN_DIALOG, allow_multiple=True, file_types=file_types
-    )
-    if not result:
-      return
-
-    file_paths = list(result)
-
-    def worker():
-      total = len(file_paths)
-      for idx, fp in enumerate(file_paths):
-        fname = os.path.basename(fp)
-        escaped_name = html.escape(fname).replace("'", "\\'")
-        progress = int(((idx + 1) / total) * 100)
-
-        self.window.evaluate_js(
-            f"onBatchProgress('{escaped_name}', {idx + 1}, {total},"
-            f" {progress});"
+        file_types = ("FactoryTalk XML Files (*.xml)", "All files (*.*)")
+        result = self.window.create_file_dialog(
+            webview.OPEN_DIALOG, allow_multiple=True, file_types=file_types
         )
-        self.db.parse_and_index_xml(fp)
+        
+        # User canceled file dialog - notify frontend to dismiss loading modal
+        if not result:
+            self.window.evaluate_js("onBatchCanceled();")
+            return
 
-      summary = self.db.get_summary()
-      self.window.evaluate_js(
-          f"onBatchComplete({summary['displays']}, {summary['elements']});"
-      )
+        file_paths = list(result)
 
-    threading.Thread(target=worker, daemon=True).start()
+        def worker():
+            total = len(file_paths)
+            for idx, fp in enumerate(file_paths):
+                fname = os.path.basename(fp)
+                escaped_name = html.escape(fname).replace("'", "\\'")
+                progress = int(((idx + 1) / total) * 100)
 
-  def search_displays(self, query):
-    return self.db.search_by_display(query)
+                self.window.evaluate_js(
+                    f"onBatchProgress('{escaped_name}', {idx + 1}, {total}, {progress});"
+                )
+                self.db.parse_and_index_xml(fp)
 
-  def search_labels(self, query):
-    return self.db.search_by_label(query)
+            summary = self.db.get_summary()
+            self.window.evaluate_js(
+                f"onBatchComplete({summary['displays']}, {summary['elements']});"
+            )
 
-  def search_tags(self, query):
-    return self.db.search_by_tag(query)
+        threading.Thread(target=worker, daemon=True).start()
 
-  def get_screen_render_data(self, display_name):
-    with self.db.lock:
-      xml_bytes = self.db.files_cache.get(display_name)
-    if not xml_bytes:
-      return None
-    compiler = FlattenedFTViewCompiler(xml_bytes, display_name)
-    return compiler.compile_svg_bundle()
+    def get_initial_stats(self):
+        return self.db.get_summary()
+
+    def clear_database(self):
+        return self.db.clear_database()
+
+    def search_displays(self, query):
+        return self.db.search_by_display(query)
+
+    def search_labels(self, query):
+        return self.db.search_by_label(query)
+
+    def search_tags(self, query):
+        return self.db.search_by_tag(query)
+
+    def get_screen_render_data(self, display_name):
+        xml_bytes = self.db.get_xml_bytes(display_name)
+        if not xml_bytes:
+            return None
+        compiler = FlattenedFTViewCompiler(xml_bytes, display_name)
+        return compiler.compile_svg_bundle()
 
 
 MAIN_PORTAL_HTML = """<!DOCTYPE html>
@@ -663,6 +604,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
         .header-title h1 { font-size: 17px; font-weight: 700; color: #FFFFFF; letter-spacing: 0.5px; }
         .header-title .author-badge { font-size: 12px; color: #AAAAAA; margin-top: 2px; }
         .header-title .author-badge b { color: #FFFFFF; }
+        .header-actions { display: flex; gap: 8px; align-items: center; }
         .btn {
             background-color: #FFFFFF;
             color: #000000;
@@ -678,6 +620,8 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
         .btn:hover { background-color: #000000; color: #FFFFFF; }
         .btn-nav { background: #000000; color: #FFFFFF; border: 1px solid #FFFFFF; }
         .btn-nav:hover { background: #FFFFFF; color: #000000; }
+        .btn-danger { background: #000000; color: #FF4444; border: 1px solid #FF4444; font-size: 11px; padding: 6px 10px; }
+        .btn-danger:hover { background: #FF4444; color: #000000; }
 
         .container { display: flex; flex: 1; overflow: hidden; position: relative; }
         
@@ -1026,7 +970,8 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             <h1>HMITagFinder</h1>
             <div class="author-badge">Created by <b>Luis Castillo</b></div>
         </div>
-        <div>
+        <div class="header-actions">
+            <button class="btn btn-danger" onclick="confirmClearDatabase()">Clear Database</button>
             <button class="btn" onclick="startLoadingBatch()">Load & Parse XML Files</button>
         </div>
     </header>
@@ -1154,6 +1099,18 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
         let currentDisplayLoading = null;
         let renderTimeoutTimer = null;
 
+        window.addEventListener('pywebviewready', async () => {
+            // Load persistent stats on application launch
+            const stats = await window.pywebview.api.get_initial_stats();
+            if (stats) {
+                document.getElementById('stat-displays').textContent = stats.displays;
+                document.getElementById('stat-elements').textContent = stats.elements;
+                if (stats.displays > 0) {
+                    onSearchInput('');
+                }
+            }
+        });
+
         function switchTab(tab) {
             currentTab = tab;
             document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
@@ -1184,6 +1141,11 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             window.pywebview.api.start_batch_import();
         }
 
+        function onBatchCanceled() {
+            // Dismiss loading state when user closes dialog without selection
+            document.getElementById('progress-modal').style.display = 'none';
+        }
+
         function onBatchProgress(fileName, current, total, percent) {
             document.getElementById('progress-status-file').textContent = fileName;
             document.getElementById('progress-status-count').textContent = current + ' / ' + total;
@@ -1195,6 +1157,15 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             document.getElementById('stat-displays').textContent = displaysCount;
             document.getElementById('stat-elements').textContent = elementsCount;
             onSearchInput(document.getElementById('main-search-input').value);
+        }
+
+        async function confirmClearDatabase() {
+            if (confirm("Are you sure you want to clear all indexed displays and cached screens from the database?")) {
+                const stats = await window.pywebview.api.clear_database();
+                document.getElementById('stat-displays').textContent = stats.displays;
+                document.getElementById('stat-elements').textContent = stats.elements;
+                onSearchInput('');
+            }
         }
 
         async function onSearchInput(query) {
@@ -1272,7 +1243,6 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             loader.style.display = 'flex';
             screenView.style.display = 'flex';
 
-            // 6-second timeout fallback
             renderTimeoutTimer = setTimeout(() => {
                 loader.style.display = 'none';
                 fallback.style.display = 'flex';
@@ -1445,21 +1415,21 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
 
 
 def main():
-  db = FTViewDatabaseHub()
-  bridge = DesktopAppBridge(db)
+    db = FTViewDatabaseHub()
+    bridge = DesktopAppBridge(db)
 
-  window = webview.create_window(
-      title="HMITagFinder - Created by Luis Castillo",
-      html=MAIN_PORTAL_HTML,
-      js_api=bridge,
-      width=1360,
-      height=860,
-      resizable=True,
-      text_select=True,
-  )
-  bridge.window = window
-  webview.start()
+    window = webview.create_window(
+        title="HMITagFinder - Created by Luis Castillo",
+        html=MAIN_PORTAL_HTML,
+        js_api=bridge,
+        width=1360,
+        height=860,
+        resizable=True,
+        text_select=True,
+    )
+    bridge.window = window
+    webview.start()
 
 
 if __name__ == "__main__":
-  main()
+    main()
