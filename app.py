@@ -129,7 +129,7 @@ class FlattenedFTViewCompiler:
         if name:
             info.append(f"Name: {name}")
 
-        tag_pattern = r"\{([A-Za-z0-9_#/@\.\:\[\]\-\s\$\%]+)\}"
+        tag_pattern = r"\{([A-Za-z0-9_#/@\.\:\[\]\-\s\$\%\\\\]+)\}"
         for k, v in elem.attrib.items():
             if isinstance(v, str):
                 for tag_match in re.findall(tag_pattern, v):
@@ -137,37 +137,24 @@ class FlattenedFTViewCompiler:
                     if clean_t and not clean_t.isdigit():
                         info.append(f"Tag: {clean_t}")
 
-        for conn in elem.findall("./connections/connection") + elem.findall("./connection"):
-            expr = conn.attrib.get("expression") or conn.attrib.get("tag")
-            conn_name = conn.attrib.get("name", "Value")
-            if expr:
-                info.append(f"Conn ({conn_name}): {expr}")
+        for conn in elem.findall(".//connection") + elem.findall(".//connections/*") + elem.findall(".//animations/*") + elem.findall(".//animateTouch"):
+            for attr_k, attr_v in conn.attrib.items():
+                if isinstance(attr_v, str):
+                    for tag_match in re.findall(tag_pattern, attr_v):
+                        clean_t = tag_match.strip()
+                        if clean_t and not clean_t.isdigit():
+                            info.append(f"Tag: {clean_t}")
 
-        for anim in elem.findall("./animations/*"):
-            anim_type = anim.tag.replace("animate", "")
-            expr = anim.attrib.get("expression") or anim.attrib.get("tag")
-            rel = anim.attrib.get("releaseAction")
-            prs = anim.attrib.get("pressAction")
-            if expr:
-                info.append(f"Anim ({anim_type}): {expr}")
-            if rel:
-                info.append(f"Release: {rel}")
-            if prs:
-                info.append(f"Press: {prs}")
-
-        for act in elem.findall("./action"):
+        for act in elem.findall(".//action"):
             t = act.attrib.get("tag")
-            act_type = act.attrib.get("type", "Action")
             if t:
-                info.append(f"Action ({act_type}): {t}")
+                info.append(f"Action: {t}")
 
-        for cmd in elem.findall("./command"):
-            rel = cmd.attrib.get("releaseAction")
-            prs = cmd.attrib.get("pressAction")
-            if rel:
-                info.append(f"Cmd (Release): {rel}")
-            if prs:
-                info.append(f"Cmd (Press): {prs}")
+        for cmd in elem.findall(".//command"):
+            for attr in ("pressAction", "releaseAction"):
+                c = cmd.attrib.get(attr)
+                if c:
+                    info.append(f"Cmd: {c}")
 
         return info
 
@@ -191,13 +178,14 @@ class FlattenedFTViewCompiler:
 
         tag_attr = self._build_tag_attr(elem_tags)
 
+        # 1. Multi-State Indicators
         if tag in ("multistateIndicator", "pilotedListIndicator"):
             x = round(float(elem.attrib.get("left", 0)), 1)
             y = round(float(elem.attrib.get("top", 0)), 1)
             w = round(float(elem.attrib.get("width", 0)), 1)
             h = round(float(elem.attrib.get("height", 0)), 1)
 
-            conn = elem.find("./connections/connection") or elem.find("./connection")
+            conn = elem.find(".//connection")
             tag_expr = conn.attrib.get("expression") if conn is not None else None
             active_id = str(self.tag_overrides.get(tag_expr, elem.attrib.get("currentStateId", "0")))
 
@@ -236,6 +224,7 @@ class FlattenedFTViewCompiler:
             out.append("</g>")
             return "".join(out)
 
+        # 2. Rectangles, Rounded Rectangles & Panels (with Fill Animation support)
         elif tag in ("rectangle", "roundedRectangle", "panel"):
             x = round(float(elem.attrib.get("left", 0)), 1)
             y = round(float(elem.attrib.get("top", 0)), 1)
@@ -247,8 +236,13 @@ class FlattenedFTViewCompiler:
             lw = elem.attrib.get("lineWidth", "1")
             rx = round(float(elem.attrib.get("cornerRadius", 0)), 1)
             rx_attr = f'rx="{rx}" ry="{rx}"' if rx > 0 else ""
+            
+            if elem.find(".//animateFill") is not None:
+                fill = elem.attrib.get("backColor", "lime")
+
             return f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{fill}" stroke="{stroke}" stroke-width="{lw}" {rx_attr} {tf} {tag_attr}/>'
 
+        # 3. Lines
         elif tag == "line":
             pts = elem.attrib.get("line", "").strip().split()
             if len(pts) >= 4:
@@ -256,6 +250,7 @@ class FlattenedFTViewCompiler:
                 lw = elem.attrib.get("lineWidth", "1")
                 return f'<line x1="{pts[0]}" y1="{pts[1]}" x2="{pts[2]}" y2="{pts[3]}" stroke="{stroke}" stroke-width="{lw}" stroke-linecap="square" {tf} {tag_attr}/>'
 
+        # 4. Polygons & Polylines
         elif tag in ("polygon", "polyline"):
             raw = elem.attrib.get("path", "").strip().split()
             if len(raw) >= 4:
@@ -266,6 +261,7 @@ class FlattenedFTViewCompiler:
                 tag_name = "polygon" if tag == "polygon" else "polyline"
                 return f'<{tag_name} points="{coords}" fill="{fill}" stroke="{stroke}" stroke-width="{lw}" {tf} {tag_attr}/>'
 
+        # 5. Ellipses & Circles
         elif tag in ("ellipse", "circle"):
             l = round(float(elem.attrib.get("left", 0)), 1)
             t_pos = round(float(elem.attrib.get("top", 0)), 1)
@@ -278,6 +274,7 @@ class FlattenedFTViewCompiler:
             lw = elem.attrib.get("lineWidth", "1")
             return f'<ellipse cx="{cx}" cy="{cy}" rx="{rx}" ry="{ry}" fill="{fill}" stroke="{stroke}" stroke-width="{lw}" {tf} {tag_attr}/>'
 
+        # 6. Arcs
         elif tag == "arc":
             l = round(float(elem.attrib.get("left", 0)), 1)
             t_pos = round(float(elem.attrib.get("top", 0)), 1)
@@ -302,6 +299,7 @@ class FlattenedFTViewCompiler:
                 sweep = 0 if end > start else 1
                 return f'<path d="M {x1} {y1} A {rx} {ry} 0 {large_arc} {sweep} {x2} {y2}" fill="none" stroke="{stroke}" stroke-width="{lw}" {tf} {tag_attr}/>'
 
+        # 7. Text
         elif tag == "text":
             x = round(float(elem.attrib.get("left", 0)), 1)
             y = round(float(elem.attrib.get("top", 0)), 1)
@@ -328,6 +326,7 @@ class FlattenedFTViewCompiler:
                 )
             return f"<g {tf} {tag_attr}>" + "".join(tspans) + "</g>"
 
+        # 8. All Pushbuttons
         elif tag in ("button", "momentaryButton", "maintainedButton", "latchedButton", "interlockingButton", "rampButton", "numericInputCursorButton"):
             x = round(float(elem.attrib.get("left", 0)), 1)
             y = round(float(elem.attrib.get("top", 0)), 1)
@@ -357,17 +356,17 @@ class FlattenedFTViewCompiler:
             out.append("</g>")
             return "".join(out)
 
+        # 9. Numeric/String Inputs and Displays
         elif tag in ("numericDisplay", "stringDisplay", "numericInput", "stringInput"):
             x = round(float(elem.attrib.get("left", 0)), 1)
             y = round(float(elem.attrib.get("top", 0)), 1)
             w = round(float(elem.attrib.get("width", 0)), 1)
             h = round(float(elem.attrib.get("height", 0)), 1)
-            size = int(elem.attrib.get("charHeight", 12))
+            size = int(elem.attrib.get("charHeight") or elem.attrib.get("fontSize") or 12)
             fg = elem.attrib.get("foreColor", "#000000")
             bg = elem.attrib.get("backColor", "#FFFFFF")
-            conn = elem.find("./connections/connection") or elem.find("./connection")
-            expr = conn.attrib.get("expression", "") if conn is not None else ""
-            val = str(self.tag_overrides.get(expr, "0.0"))
+            is_string = tag == "stringDisplay"
+            display_text = "[STRING]" if is_string else "0.0"
             is_input = "Input" in tag
             border_stroke = "#000000" if is_input else "none"
             return (
@@ -375,10 +374,11 @@ class FlattenedFTViewCompiler:
                 f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{bg}" stroke="{border_stroke}" stroke-width="1"/>'
                 f'<text x="{round(x + w/2, 1)}" y="{round(y + h/2 + size/3, 1)}" '
                 f'font-family="Consolas, monospace" font-size="{size}px" font-weight="bold" '
-                f'fill="{fg}" text-anchor="middle" text-rendering="geometricPrecision">{val}</text>'
+                f'fill="{fg}" text-anchor="middle" text-rendering="geometricPrecision">{display_text}</text>'
                 f"</g>"
             )
 
+        # 10. Gauges, Trends & Bar Graphs
         elif tag in ("barGraph", "gauge", "trend"):
             x = round(float(elem.attrib.get("left", 0)), 1)
             y = round(float(elem.attrib.get("top", 0)), 1)
@@ -393,6 +393,7 @@ class FlattenedFTViewCompiler:
                 f"</g>"
             )
 
+        # 11. Images & Symbols
         elif tag in ("image", "symbol"):
             x = round(float(elem.attrib.get("left", 0)), 1)
             y = round(float(elem.attrib.get("top", 0)), 1)
@@ -515,7 +516,7 @@ class FTViewDatabaseHub:
     def extract_ft_tags_from_text(self, text_val: str) -> list:
         if not text_val:
             return []
-        tag_pattern = r"\{([A-Za-z0-9_#/@\.\:\[\]\-\s\$\%]+)\}"
+        tag_pattern = r"\{([A-Za-z0-9_#/@\.\:\[\]\-\s\$\%\\\\]+)\}"
         bracketed = re.findall(tag_pattern, text_val)
         results = []
         for b in bracketed:
@@ -545,7 +546,7 @@ class FTViewDatabaseHub:
                 if clean:
                     texts.append(clean)
 
-            for sub_cap in elem.findall("./caption") + elem.findall("./up/caption") + elem.findall("./state/caption"):
+            for sub_cap in elem.findall(".//caption") + elem.findall(".//up/caption") + elem.findall(".//state/caption"):
                 sc = sub_cap.attrib.get("caption", "").strip()
                 if sc and sc not in texts:
                     texts.append(sc)
@@ -557,28 +558,21 @@ class FTViewDatabaseHub:
                         if t not in tags:
                             tags.append(t)
 
-            for conn in elem.findall("./connections/connection") + elem.findall("./connection"):
-                expr = conn.attrib.get("expression") or conn.attrib.get("tag")
-                if expr:
-                    for t in self.extract_ft_tags_from_text(expr):
-                        if t not in tags:
-                            tags.append(t)
+            for conn in elem.findall(".//connections/connection") + elem.findall(".//connection") + elem.findall(".//animations/*") + elem.findall(".//animateTouch"):
+                for attr_k, attr_v in conn.attrib.items():
+                    if isinstance(attr_v, str):
+                        for t in self.extract_ft_tags_from_text(attr_v):
+                            if t not in tags:
+                                tags.append(t)
 
-            for anim in elem.findall("./animations/*"):
-                expr = anim.attrib.get("expression") or anim.attrib.get("tag")
-                if expr:
-                    for t in self.extract_ft_tags_from_text(expr):
-                        if t not in tags:
-                            tags.append(t)
-
-            for act in elem.findall("./action"):
+            for act in elem.findall(".//action"):
                 t = act.attrib.get("tag")
                 if t:
                     for tg in self.extract_ft_tags_from_text(t):
                         if tg not in tags:
                             tags.append(tg)
 
-            for cmd in elem.findall("./command"):
+            for cmd in elem.findall(".//command"):
                 for attr in ("pressAction", "releaseAction"):
                     c = cmd.attrib.get(attr)
                     if c:
@@ -1838,6 +1832,7 @@ def main():
             text_select=True,
         )
         bridge.window = window
+        # Debug window disabled here as requested
         webview.start()
     finally:
         single_lock.release()
