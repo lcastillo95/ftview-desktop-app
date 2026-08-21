@@ -26,6 +26,52 @@ def get_screens_dir() -> str:
   return screens_dir
 
 
+def choose_files_native(window=None) -> list:
+  """Opens the native file explorer dialog with automated multi-tier fallbacks."""
+  # Tier 1: pywebview native file dialog (version-adaptive)
+  if window:
+    try:
+      dialog_type = getattr(
+          getattr(webview, "FileDialog", None), "OPEN", None
+      ) or getattr(webview, "OPEN_DIALOG", None)
+      file_types = ("FactoryTalk XML Files (*.xml)", "All files (*.*)")
+
+      if dialog_type is not None:
+        res = window.create_file_dialog(
+            dialog_type, allow_multiple=True, file_types=file_types
+        )
+      else:
+        res = window.create_file_dialog(
+            allow_multiple=True, file_types=file_types
+        )
+
+      if res:
+        return list(res)
+      elif res is not None and len(res) == 0:
+        return []
+    except Exception as e:
+      print(f"pywebview file dialog notice: {e}, using native system fallback")
+
+  # Tier 2: Standard Tkinter native Windows file chooser
+  try:
+    import tkinter as tk
+    from tkinter import filedialog
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    files = filedialog.askopenfilenames(
+        title="Select FactoryTalk XML Screen Files",
+        filetypes=[("XML files", "*.xml"), ("All files", "*.*")],
+    )
+    root.destroy()
+    return list(files) if files else []
+  except Exception as tk_err:
+    print(f"System dialog error: {tk_err}")
+
+  return []
+
+
 class FlattenedFTViewCompiler:
 
   def __init__(
@@ -518,7 +564,7 @@ class FTViewDatabaseHub:
     try:
       self._setup_schema()
     except Exception as e:
-      print(f"Schema recovery trigger: {e}")
+      print(f"Schema recovery: {e}")
       try:
         if os.path.exists(self.db_path):
           os.remove(self.db_path)
@@ -588,7 +634,6 @@ class FTViewDatabaseHub:
     with open(file_path, "rb") as f:
       xml_bytes = f.read()
 
-    # Save physical XML to disk storage (no bloated SQLite BLOBs)
     cached_file_path = os.path.join(self.screens_dir, display_name)
     with open(cached_file_path, "wb") as f:
       f.write(xml_bytes)
@@ -657,7 +702,6 @@ class FTViewDatabaseHub:
         label_text_col = "\n".join(texts)
         tags_col = " | ".join(tags)
         sig = (label_text_col, tags_col)
-        # Deduplicate repeated identical group elements
         if sig not in dedup_elements:
           dedup_elements.add(sig)
           rows_to_insert.append(
@@ -715,7 +759,6 @@ class FTViewDatabaseHub:
         cur.execute("DELETE FROM display_files;")
         conn.commit()
 
-      # Clear cached disk files
       for f in os.listdir(self.screens_dir):
         fp = os.path.join(self.screens_dir, f)
         if os.path.isfile(fp):
@@ -832,22 +875,10 @@ class DesktopAppBridge:
       return {"displays_count": 0, "elements_count": 0, "displays": []}
 
   def open_import_dialog(self):
-    if not self.window:
-      return {"started": False}
-
-    file_types = ("FactoryTalk XML Files (*.xml)", "All files (*.*)")
-    try:
-      result = self.window.create_file_dialog(
-          webview.OPEN_DIALOG, allow_multiple=True, file_types=file_types
-      )
-    except Exception as e:
-      print(f"Dialog invocation error: {e}")
+    file_paths = choose_files_native(self.window)
+    if not file_paths:
       return {"started": False, "canceled": True}
 
-    if not result:
-      return {"started": False, "canceled": True}
-
-    file_paths = list(result)
     total = len(file_paths)
     self.import_state = {
         "active": True,
