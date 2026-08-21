@@ -392,6 +392,7 @@ class FTViewDatabaseHub:
       conn = self._connect()
       try:
         cur = conn.cursor()
+        # 1. Base table creation
         cur.execute("""
                     CREATE TABLE IF NOT EXISTS display_files (
                         display_name TEXT PRIMARY KEY,
@@ -408,6 +409,37 @@ class FTViewDatabaseHub:
                         tags TEXT
                     )
                 """)
+
+        # 2. Automated Schema Migration: check columns and add if missing
+        cur.execute("PRAGMA table_info(display_files);")
+        df_cols = [row[1] for row in cur.fetchall()]
+        if "display_normalized" not in df_cols:
+          cur.execute(
+              "ALTER TABLE display_files ADD COLUMN display_normalized TEXT;"
+          )
+
+        cur.execute("PRAGMA table_info(hmi_elements);")
+        he_cols = [row[1] for row in cur.fetchall()]
+        if "display_normalized" not in he_cols:
+          cur.execute(
+              "ALTER TABLE hmi_elements ADD COLUMN display_normalized TEXT;"
+          )
+
+        # 3. Backfill normalized identifiers if needed
+        cur.execute(
+            "SELECT display_name FROM display_files WHERE display_normalized IS"
+            " NULL OR display_normalized = ''"
+        )
+        unnorm_files = cur.fetchall()
+        for (dname,) in unnorm_files:
+          norm = self.normalize_display_name(dname)
+          cur.execute(
+              "UPDATE display_files SET display_normalized = ? WHERE"
+              " display_name = ?",
+              (norm, dname),
+          )
+
+        # 4. Safe index creation
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_disp_files ON"
             " display_files(display_normalized)"
