@@ -580,26 +580,15 @@ class FTViewDatabaseHub:
       finally:
         conn.close()
 
-  def search_by_display(self, query: str):
-    norm_q = self.normalize_display_name(query)
+  def get_all_displays(self):
     with self.lock:
       conn = self._connect()
       try:
         cur = conn.cursor()
-        if not norm_q:
-          cur.execute(
-              "SELECT DISTINCT display_name, display_normalized FROM"
-              " hmi_elements ORDER BY display_name LIMIT 60"
-          )
-        else:
-          cur.execute(
-              """
-                        SELECT DISTINCT display_name, display_normalized FROM hmi_elements 
-                        WHERE display_normalized LIKE ? OR display_name LIKE ?
-                        ORDER BY display_name LIMIT 60
-                        """,
-              (f"%{norm_q}%", f"%{query}%"),
-          )
+        cur.execute(
+            "SELECT DISTINCT display_name, display_normalized FROM hmi_elements"
+            " ORDER BY display_name"
+        )
         rows = cur.fetchall()
         return [
             {"display_name": r[0], "display_normalized": r[1]} for r in rows
@@ -607,8 +596,32 @@ class FTViewDatabaseHub:
       finally:
         conn.close()
 
-  def search_by_label(self, query: str):
-    if not query.strip():
+  def search_by_display(self, query: str = ""):
+    if not query or not isinstance(query, str) or not query.strip():
+      return self.get_all_displays()
+
+    norm_q = self.normalize_display_name(query)
+    with self.lock:
+      conn = self._connect()
+      try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+                    SELECT DISTINCT display_name, display_normalized FROM hmi_elements 
+                    WHERE display_normalized LIKE ? OR display_name LIKE ?
+                    ORDER BY display_name LIMIT 60
+                    """,
+            (f"%{norm_q}%", f"%{query}%"),
+        )
+        rows = cur.fetchall()
+        return [
+            {"display_name": r[0], "display_normalized": r[1]} for r in rows
+        ]
+      finally:
+        conn.close()
+
+  def search_by_label(self, query: str = ""):
+    if not query or not isinstance(query, str) or not query.strip():
       return []
     with self.lock:
       conn = self._connect()
@@ -631,8 +644,8 @@ class FTViewDatabaseHub:
       finally:
         conn.close()
 
-  def search_by_tag(self, query: str):
-    if not query.strip():
+  def search_by_tag(self, query: str = ""):
+    if not query or not isinstance(query, str) or not query.strip():
       return []
     with self.lock:
       conn = self._connect()
@@ -724,17 +737,20 @@ class DesktopAppBridge:
   def get_initial_stats(self):
     return self.db.get_summary()
 
+  def get_all_displays(self):
+    return self.db.get_all_displays()
+
   def clear_database(self):
     return self.db.clear_database()
 
-  def search_displays(self, query):
-    return self.db.search_by_display(query)
+  def search_displays(self, query=""):
+    return self.db.search_by_display(query or "")
 
-  def search_labels(self, query):
-    return self.db.search_by_label(query)
+  def search_labels(self, query=""):
+    return self.db.search_by_label(query or "")
 
-  def search_tags(self, query):
-    return self.db.search_by_tag(query)
+  def search_tags(self, query=""):
+    return self.db.search_by_tag(query or "")
 
   def get_screen_render_data(self, display_name):
     xml_bytes = self.db.get_xml_bytes(display_name)
@@ -1316,13 +1332,13 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
                     document.getElementById('stat-displays').textContent = stats.displays;
                     document.getElementById('stat-elements').textContent = stats.elements;
                 }
-                await performSearch('');
+                const initialDisplays = await window.pywebview.api.get_all_displays();
+                renderDisplaysTable(initialDisplays);
             } catch (e) {
                 console.error("Init stats error", e);
             }
         }
 
-        // Poll safely for bridge initialization
         const checkBridgeInterval = setInterval(() => {
             if (window.pywebview && window.pywebview.api) {
                 clearInterval(checkBridgeInterval);
@@ -1331,6 +1347,24 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
         }, 50);
 
         window.addEventListener('pywebviewready', initApp);
+
+        function renderDisplaysTable(results) {
+            const tbody = document.getElementById('table-body');
+            const thead = document.getElementById('table-head');
+            thead.innerHTML = `<tr><th>Display Name</th><th>Normalized Identifier</th><th>Action</th></tr>`;
+            
+            if (!results || results.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="3" class="empty-state">No displays indexed. Click "Load & Parse XML Files" to begin.</td></tr>`;
+                return;
+            }
+            tbody.innerHTML = results.map(r => `
+                <tr>
+                    <td><b>${r.display_name}</b></td>
+                    <td style="font-family: 'Consolas', monospace; color: #AAAAAA;">${r.display_normalized}</td>
+                    <td><span class="screen-link" onclick="openScreen('${r.display_name}')">[ Launch Screen ]</span></td>
+                </tr>
+            `).join('');
+        }
 
         async function switchTab(tab) {
             currentTab = tab;
@@ -1416,32 +1450,22 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             if (!window.pywebview || !window.pywebview.api) return;
             const tbody = document.getElementById('table-body');
             const thead = document.getElementById('table-head');
+            const cleanQuery = (query || "").trim();
 
             try {
                 if (currentTab === 'displays') {
-                    thead.innerHTML = `<tr><th>Display Name</th><th>Normalized Identifier</th><th>Action</th></tr>`;
-                    const results = await window.pywebview.api.search_displays(query || "");
-                    if (!results || results.length === 0) {
-                        tbody.innerHTML = `<tr><td colspan="3" class="empty-state">No displays indexed. Click "Load & Parse XML Files" to begin.</td></tr>`;
-                        return;
-                    }
-                    tbody.innerHTML = results.map(r => `
-                        <tr>
-                            <td><b>${r.display_name}</b></td>
-                            <td style="font-family: 'Consolas', monospace; color: #AAAAAA;">${r.display_normalized}</td>
-                            <td><span class="screen-link" onclick="openScreen('${r.display_name}')">[ Launch Screen ]</span></td>
-                        </tr>
-                    `).join('');
+                    const results = cleanQuery ? await window.pywebview.api.search_displays(cleanQuery) : await window.pywebview.api.get_all_displays();
+                    renderDisplaysTable(results);
 
                 } else if (currentTab === 'labels') {
                     thead.innerHTML = `<tr><th>Display</th><th>Label / Caption Found</th><th>Associated Tag(s)</th></tr>`;
-                    if (!query || !query.trim()) {
+                    if (!cleanQuery) {
                         tbody.innerHTML = `<tr><td colspan="3" class="empty-state">Type text above to search screen labels.</td></tr>`;
                         return;
                     }
-                    const results = await window.pywebview.api.search_labels(query);
+                    const results = await window.pywebview.api.search_labels(cleanQuery);
                     if (!results || results.length === 0) {
-                        tbody.innerHTML = `<tr><td colspan="3" class="empty-state">No screens found containing "${query}".</td></tr>`;
+                        tbody.innerHTML = `<tr><td colspan="3" class="empty-state">No screens found containing "${cleanQuery}".</td></tr>`;
                         return;
                     }
                     tbody.innerHTML = results.map(r => `
@@ -1454,13 +1478,13 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
 
                 } else if (currentTab === 'tags') {
                     thead.innerHTML = `<tr><th>Display</th><th>PLC Tag / Expression</th><th>Associated Text</th></tr>`;
-                    if (!query || !query.trim()) {
+                    if (!cleanQuery) {
                         tbody.innerHTML = `<tr><td colspan="3" class="empty-state">Type a tag pattern above to cross-reference displays.</td></tr>`;
                         return;
                     }
-                    const results = await window.pywebview.api.search_tags(query);
+                    const results = await window.pywebview.api.search_tags(cleanQuery);
                     if (!results || results.length === 0) {
-                        tbody.innerHTML = `<tr><td colspan="3" class="empty-state">No screens found referencing "${query}".</td></tr>`;
+                        tbody.innerHTML = `<tr><td colspan="3" class="empty-state">No screens found referencing "${cleanQuery}".</td></tr>`;
                         return;
                     }
                     tbody.innerHTML = results.map(r => `
@@ -1678,7 +1702,6 @@ def main():
       text_select=True,
   )
   bridge.window = window
-
   webview.start()
 
 
