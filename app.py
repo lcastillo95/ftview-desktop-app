@@ -8,6 +8,7 @@ import sys
 import threading
 import traceback
 import xml.etree.ElementTree as ET
+from contextlib import contextmanager
 import webview
 
 # Optional Windows Single-Instance Mutex
@@ -190,7 +191,6 @@ class FlattenedFTViewCompiler:
 
         tag_attr = self._build_tag_attr(elem_tags)
 
-        # 1. Multi-State Indicators
         if tag in ("multistateIndicator", "pilotedListIndicator"):
             x = round(float(elem.attrib.get("left", 0)), 1)
             y = round(float(elem.attrib.get("top", 0)), 1)
@@ -236,7 +236,6 @@ class FlattenedFTViewCompiler:
             out.append("</g>")
             return "".join(out)
 
-        # 2. Rectangles, Rounded Rectangles & Panels
         elif tag in ("rectangle", "roundedRectangle", "panel"):
             x = round(float(elem.attrib.get("left", 0)), 1)
             y = round(float(elem.attrib.get("top", 0)), 1)
@@ -250,7 +249,6 @@ class FlattenedFTViewCompiler:
             rx_attr = f'rx="{rx}" ry="{rx}"' if rx > 0 else ""
             return f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{fill}" stroke="{stroke}" stroke-width="{lw}" {rx_attr} {tf} {tag_attr}/>'
 
-        # 3. Lines
         elif tag == "line":
             pts = elem.attrib.get("line", "").strip().split()
             if len(pts) >= 4:
@@ -258,7 +256,6 @@ class FlattenedFTViewCompiler:
                 lw = elem.attrib.get("lineWidth", "1")
                 return f'<line x1="{pts[0]}" y1="{pts[1]}" x2="{pts[2]}" y2="{pts[3]}" stroke="{stroke}" stroke-width="{lw}" stroke-linecap="square" {tf} {tag_attr}/>'
 
-        # 4. Polygons & Polylines
         elif tag in ("polygon", "polyline"):
             raw = elem.attrib.get("path", "").strip().split()
             if len(raw) >= 4:
@@ -269,7 +266,6 @@ class FlattenedFTViewCompiler:
                 tag_name = "polygon" if tag == "polygon" else "polyline"
                 return f'<{tag_name} points="{coords}" fill="{fill}" stroke="{stroke}" stroke-width="{lw}" {tf} {tag_attr}/>'
 
-        # 5. Ellipses & Circles
         elif tag in ("ellipse", "circle"):
             l = round(float(elem.attrib.get("left", 0)), 1)
             t_pos = round(float(elem.attrib.get("top", 0)), 1)
@@ -282,7 +278,6 @@ class FlattenedFTViewCompiler:
             lw = elem.attrib.get("lineWidth", "1")
             return f'<ellipse cx="{cx}" cy="{cy}" rx="{rx}" ry="{ry}" fill="{fill}" stroke="{stroke}" stroke-width="{lw}" {tf} {tag_attr}/>'
 
-        # 6. Arcs
         elif tag == "arc":
             l = round(float(elem.attrib.get("left", 0)), 1)
             t_pos = round(float(elem.attrib.get("top", 0)), 1)
@@ -307,7 +302,6 @@ class FlattenedFTViewCompiler:
                 sweep = 0 if end > start else 1
                 return f'<path d="M {x1} {y1} A {rx} {ry} 0 {large_arc} {sweep} {x2} {y2}" fill="none" stroke="{stroke}" stroke-width="{lw}" {tf} {tag_attr}/>'
 
-        # 7. Text
         elif tag == "text":
             x = round(float(elem.attrib.get("left", 0)), 1)
             y = round(float(elem.attrib.get("top", 0)), 1)
@@ -334,7 +328,6 @@ class FlattenedFTViewCompiler:
                 )
             return f"<g {tf} {tag_attr}>" + "".join(tspans) + "</g>"
 
-        # 8. All Pushbuttons
         elif tag in ("button", "momentaryButton", "maintainedButton", "latchedButton", "interlockingButton", "rampButton", "numericInputCursorButton"):
             x = round(float(elem.attrib.get("left", 0)), 1)
             y = round(float(elem.attrib.get("top", 0)), 1)
@@ -364,7 +357,6 @@ class FlattenedFTViewCompiler:
             out.append("</g>")
             return "".join(out)
 
-        # 9. Numeric/String Inputs and Displays
         elif tag in ("numericDisplay", "stringDisplay", "numericInput", "stringInput"):
             x = round(float(elem.attrib.get("left", 0)), 1)
             y = round(float(elem.attrib.get("top", 0)), 1)
@@ -387,7 +379,6 @@ class FlattenedFTViewCompiler:
                 f"</g>"
             )
 
-        # 10. Gauges, Trends & Bar Graphs
         elif tag in ("barGraph", "gauge", "trend"):
             x = round(float(elem.attrib.get("left", 0)), 1)
             y = round(float(elem.attrib.get("top", 0)), 1)
@@ -402,7 +393,6 @@ class FlattenedFTViewCompiler:
                 f"</g>"
             )
 
-        # 11. Images & Symbols
         elif tag in ("image", "symbol"):
             x = round(float(elem.attrib.get("left", 0)), 1)
             y = round(float(elem.attrib.get("top", 0)), 1)
@@ -461,13 +451,22 @@ class FTViewDatabaseHub:
         self.db_path = os.path.join(self.app_dir, "hmitagfinder.db")
         self._init_db()
 
-    def _connect(self):
-        # Clean connection without repeating PRAGMA statements
-        return sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
+    @contextmanager
+    def _get_conn(self):
+        """Thread-safe connection manager that explicitly closes and releases locks on exit."""
+        conn = sqlite3.connect(self.db_path, timeout=60.0, check_same_thread=False)
+        conn.execute("PRAGMA busy_timeout = 60000;")
+        try:
+            yield conn
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     def _init_db(self):
         with self.lock:
-            with self._connect() as conn:
+            with self._get_conn() as conn:
                 conn.execute("PRAGMA journal_mode=DELETE;")
                 conn.execute("PRAGMA synchronous=NORMAL;")
                 cur = conn.cursor()
@@ -538,7 +537,6 @@ class FTViewDatabaseHub:
         dedup_elements = set()
         rows_to_insert = []
 
-        # Single linear pass O(N) inspecting direct node attributes & immediate child nodes
         for elem in root.iter():
             texts = []
             cap = elem.attrib.get("caption")
@@ -547,7 +545,6 @@ class FTViewDatabaseHub:
                 if clean:
                     texts.append(clean)
 
-            # Direct children only (eliminates O(N^2) subtree scan churn)
             for sub_cap in elem.findall("./caption") + elem.findall("./up/caption") + elem.findall("./state/caption"):
                 sc = sub_cap.attrib.get("caption", "").strip()
                 if sc and sc not in texts:
@@ -598,7 +595,7 @@ class FTViewDatabaseHub:
                     rows_to_insert.append((display_name, norm_name, label_text_col, tags_col))
 
         with self.lock:
-            with self._connect() as conn:
+            with self._get_conn() as conn:
                 cur = conn.cursor()
                 cur.execute(
                     "INSERT OR REPLACE INTO display_files (display_name, display_normalized, xml_bytes) VALUES (?, ?, ?)",
@@ -617,7 +614,7 @@ class FTViewDatabaseHub:
 
     def get_xml_bytes(self, display_name: str) -> bytes:
         with self.lock:
-            with self._connect() as conn:
+            with self._get_conn() as conn:
                 cur = conn.cursor()
                 cur.execute("SELECT xml_bytes FROM display_files WHERE display_name = ?", (display_name,))
                 row = cur.fetchone()
@@ -625,7 +622,7 @@ class FTViewDatabaseHub:
 
     def get_summary(self):
         with self.lock:
-            with self._connect() as conn:
+            with self._get_conn() as conn:
                 cur = conn.cursor()
                 cur.execute("SELECT COUNT(*) FROM display_files")
                 displays_count = cur.fetchone()[0] or 0
@@ -635,7 +632,7 @@ class FTViewDatabaseHub:
 
     def clear_database(self):
         with self.lock:
-            with self._connect() as conn:
+            with self._get_conn() as conn:
                 cur = conn.cursor()
                 cur.execute("DELETE FROM hmi_elements;")
                 cur.execute("DELETE FROM display_files;")
@@ -644,7 +641,7 @@ class FTViewDatabaseHub:
 
     def get_all_displays(self):
         with self.lock:
-            with self._connect() as conn:
+            with self._get_conn() as conn:
                 cur = conn.cursor()
                 cur.execute("SELECT display_name, display_normalized FROM display_files ORDER BY display_name")
                 rows = cur.fetchall()
@@ -657,7 +654,7 @@ class FTViewDatabaseHub:
 
         norm_q = self.normalize_display_name(query_str)
         with self.lock:
-            with self._connect() as conn:
+            with self._get_conn() as conn:
                 cur = conn.cursor()
                 cur.execute(
                     """
@@ -675,7 +672,7 @@ class FTViewDatabaseHub:
         if not query_str:
             return []
         with self.lock:
-            with self._connect() as conn:
+            with self._get_conn() as conn:
                 cur = conn.cursor()
                 cur.execute(
                     """
@@ -694,7 +691,7 @@ class FTViewDatabaseHub:
         if not query_str:
             return []
         with self.lock:
-            with self._connect() as conn:
+            with self._get_conn() as conn:
                 cur = conn.cursor()
                 cur.execute(
                     """
@@ -738,6 +735,9 @@ class DesktopAppBridge:
             return {"displays_count": 0, "elements_count": 0, "displays": []}
 
     def open_import_dialog(self):
+        if self.import_state.get("active", False):
+            return {"started": False, "busy": True}
+
         file_paths = choose_files_dialog(self.window)
         if not file_paths:
             return {"started": False, "canceled": True}
@@ -783,10 +783,19 @@ class DesktopAppBridge:
 
     def clear_database(self):
         try:
-            return self.db.clear_database()
+            if self.import_state.get("active", False):
+                return {"success": False, "busy": True, "displays": 0, "elements": 0}
+
+            result = self.db.clear_database()
+            return {
+                "success": True,
+                "busy": False,
+                "displays": result["displays"],
+                "elements": result["elements"],
+            }
         except Exception as e:
             print(f"Clear DB error: {e}")
-            return {"displays": 0, "elements": 0}
+            return {"success": False, "busy": False, "displays": 0, "elements": 0}
 
     def search_displays(self, query=""):
         try:
@@ -871,11 +880,12 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }
-        .btn:hover { background-color: #000000; color: #FFFFFF; }
+        .btn:hover:not(:disabled) { background-color: #000000; color: #FFFFFF; }
+        .btn:disabled { opacity: 0.4; cursor: not-allowed; }
         .btn-nav { background: #000000; color: #FFFFFF; border: 1px solid #FFFFFF; }
-        .btn-nav:hover { background: #FFFFFF; color: #000000; }
+        .btn-nav:hover:not(:disabled) { background: #FFFFFF; color: #000000; }
         .btn-danger { background: #000000; color: #FF4444; border: 1px solid #FF4444; font-size: 11px; padding: 6px 10px; }
-        .btn-danger:hover { background: #FF4444; color: #000000; }
+        .btn-danger:hover:not(:disabled) { background: #FF4444; color: #000000; }
 
         .container { display: flex; flex: 1; overflow: hidden; position: relative; }
         
@@ -1381,6 +1391,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
         let renderTimeoutTimer = null;
         let isInitialized = false;
         let isImporting = false;
+        let isClearingDatabase = false;
 
         function escapeJsString(str) {
             return (str || '').replace(/\\\\/g, '\\\\\\\\').replace(/'/g, "\\\\'");
@@ -1457,22 +1468,35 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
         }
 
         async function startLoadingBatch() {
-            if (isImporting) return;
+            if (isImporting || isClearingDatabase) return;
+            
+            isImporting = true;
+
+            const loadButton = document.querySelector('button[onclick="startLoadingBatch()"]');
+            const clearButton = document.querySelector('button[onclick="openClearDatabaseModal()"]');
+            if (loadButton) loadButton.disabled = true;
+            if (clearButton) clearButton.disabled = true;
+
             let resp;
             try {
                 resp = await window.pywebview.api.open_import_dialog();
             } catch (e) {
                 console.error("Dialog error:", e);
+                isImporting = false;
+                if (loadButton) loadButton.disabled = false;
+                if (clearButton) clearButton.disabled = false;
                 document.getElementById('progress-modal').style.display = 'none';
                 return;
             }
 
             if (!resp || !resp.started) {
+                isImporting = false;
+                if (loadButton) loadButton.disabled = false;
+                if (clearButton) clearButton.disabled = false;
                 document.getElementById('progress-modal').style.display = 'none';
                 return;
             }
 
-            isImporting = true;
             document.getElementById('progress-modal').style.display = 'flex';
             document.getElementById('progress-fill').style.width = '0%';
             document.getElementById('progress-status-file').textContent = 'Starting parsing...';
@@ -1492,6 +1516,12 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
 
                     if (st.done) {
                         isImporting = false;
+
+                        const loadButton = document.querySelector('button[onclick="startLoadingBatch()"]');
+                        const clearButton = document.querySelector('button[onclick="openClearDatabaseModal()"]');
+                        if (loadButton) loadButton.disabled = false;
+                        if (clearButton) clearButton.disabled = false;
+
                         document.getElementById('progress-modal').style.display = 'none';
                         document.getElementById('stat-displays').textContent = st.displays;
                         document.getElementById('stat-elements').textContent = st.elements;
@@ -1511,6 +1541,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
         }
 
         function openClearDatabaseModal() {
+            if (isImporting || isClearingDatabase) return;
             document.getElementById('clear-db-modal').style.display = 'flex';
         }
 
@@ -1519,14 +1550,29 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
         }
 
         async function executeClearDatabase() {
+            if (isClearingDatabase || isImporting) return;
+            isClearingDatabase = true;
+
             closeClearDatabaseModal();
+
+            const loadButton = document.querySelector('button[onclick="startLoadingBatch()"]');
+            const clearButton = document.querySelector('button[onclick="openClearDatabaseModal()"]');
+            if (loadButton) loadButton.disabled = true;
+            if (clearButton) clearButton.disabled = true;
+
             try {
                 const stats = await window.pywebview.api.clear_database();
                 document.getElementById('stat-displays').textContent = stats.displays || 0;
                 document.getElementById('stat-elements').textContent = stats.elements || 0;
+                document.getElementById('main-search-input').value = '';
+                currentTab = 'displays';
                 renderDisplaysTable([]);
             } catch (e) {
                 console.error("Clear DB error:", e);
+            } finally {
+                isClearingDatabase = false;
+                if (loadButton) loadButton.disabled = false;
+                if (clearButton) clearButton.disabled = false;
             }
         }
 
@@ -1792,7 +1838,7 @@ def main():
             text_select=True,
         )
         bridge.window = window
-        webview.start(debug=True)
+        webview.start()
     finally:
         single_lock.release()
 
