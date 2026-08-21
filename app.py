@@ -10,6 +10,11 @@ import traceback
 import xml.etree.ElementTree as ET
 import webview
 
+# Optional Windows Single-Instance Mutex
+if sys.platform == "win32":
+    import ctypes
+    from ctypes import wintypes
+
 
 def get_app_data_path() -> str:
     if sys.platform == "win32":
@@ -19,6 +24,28 @@ def get_app_data_path() -> str:
     app_dir = os.path.join(base_dir, "HMITagFinder")
     os.makedirs(app_dir, exist_ok=True)
     return app_dir
+
+
+class SingleInstanceLock:
+    """Ensures only one instance of HMITagFinder runs at a time to prevent DB locks."""
+    def __init__(self, lock_name="Local\\HMITagFinder_SingleInstance_Mutex"):
+        self.lock_name = lock_name
+        self.mutex = None
+
+    def acquire(self) -> bool:
+        if sys.platform == "win32":
+            kernel32 = ctypes.windll.kernel32
+            ERROR_ALREADY_EXISTS = 183
+            self.mutex = kernel32.CreateMutexW(None, False, self.lock_name)
+            last_err = kernel32.GetLastError()
+            if last_err == ERROR_ALREADY_EXISTS:
+                return False
+        return True
+
+    def release(self):
+        if sys.platform == "win32" and self.mutex:
+            ctypes.windll.kernel32.CloseHandle(self.mutex)
+            self.mutex = None
 
 
 def safe_parse_xml(xml_bytes: bytes) -> ET.Element:
@@ -34,7 +61,6 @@ def safe_parse_xml(xml_bytes: bytes) -> ET.Element:
     if xml_str is None:
         xml_str = xml_bytes.decode("latin-1", errors="replace")
 
-    # Normalize XML declaration to UTF-8 so expat parser never fails on Windows-1252 headers
     xml_str = re.sub(
         r'<\?xml([^>]+)encoding=["\'][^"\']+["\']',
         r'<?xml\1encoding="UTF-8"',
@@ -433,91 +459,55 @@ class FTViewDatabaseHub:
         self.lock = threading.RLock()
         self.app_dir = get_app_data_path()
         self.db_path = os.path.join(self.app_dir, "hmitagfinder.db")
-        self._cleanup_orphaned_wal()
         self._init_db()
 
-    def _cleanup_orphaned_wal(self):
-        """Removes orphaned WAL lock files if the main database was deleted."""
-        for ext in ("-wal", "-shm"):
-            p = self.db_path + ext
-            if os.path.exists(p) and not os.path.exists(self.db_path):
-                try:
-                    os.remove(p)
-                except Exception:
-                    pass
-
     def _connect(self):
-        conn = sqlite3.connect(self.db_path, timeout=30.0)
-        conn.execute("PRAGMA journal_mode=DELETE;")
-        conn.execute("PRAGMA synchronous=NORMAL;")
-        return conn
+        # Clean connection without repeating PRAGMA statements
+        return sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
 
     def _init_db(self):
         with self.lock:
-            try:
-                with self._connect() as conn:
-                    cur = conn.cursor()
-                    cur.execute("""
-                        CREATE TABLE IF NOT EXISTS display_files (
-                            display_name TEXT PRIMARY KEY,
-                            display_normalized TEXT,
-                            xml_bytes BLOB
-                        )
-                    """)
-                    cur.execute("""
-                        CREATE TABLE IF NOT EXISTS hmi_elements (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            display_name TEXT,
-                            display_normalized TEXT,
-                            label_text TEXT,
-                            tags TEXT
-                        )
-                    """)
-                    cur.execute("PRAGMA table_info(display_files);")
-                    cols = [r[1] for r in cur.fetchall()]
-                    if "display_normalized" not in cols:
-                        cur.execute("ALTER TABLE display_files ADD COLUMN display_normalized TEXT;")
+            with self._connect() as conn:
+                conn.execute("PRAGMA journal_mode=DELETE;")
+                conn.execute("PRAGMA synchronous=NORMAL;")
+                cur = conn.cursor()
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS display_files (
+                        display_name TEXT PRIMARY KEY,
+                        display_normalized TEXT,
+                        xml_bytes BLOB
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS hmi_elements (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        display_name TEXT,
+                        display_normalized TEXT,
+                        label_text TEXT,
+                        tags TEXT
+                    )
+                """)
 
-                    cur.execute("CREATE INDEX IF NOT EXISTS idx_disp_files ON display_files(display_normalized)")
-                    cur.execute("CREATE INDEX IF NOT EXISTS idx_norm ON hmi_elements(display_normalized)")
-                    cur.execute("CREATE INDEX IF NOT EXISTS idx_disp ON hmi_elements(display_name)")
-                    cur.execute("CREATE INDEX IF NOT EXISTS idx_lbl ON hmi_elements(label_text)")
-                    cur.execute("CREATE INDEX IF NOT EXISTS idx_tags ON hmi_elements(tags)")
-                    conn.commit()
-            except Exception as e:
-                print(f"Database init warning: {e}. Resetting database cleanly.")
-                if os.path.exists(self.db_path):
-                    try:
-                        os.remove(self.db_path)
-                    except Exception:
-                        pass
-                self._init_db_force()
+                # Automated Schema Migration for display_files
+                cur.execute("PRAGMA table_info(display_files);")
+                cols = [r[1] for r in cur.fetchall()]
+                if "display_normalized" not in cols:
+                    cur.execute("ALTER TABLE display_files ADD COLUMN display_normalized TEXT;")
+                if "xml_bytes" not in cols:
+                    cur.execute("ALTER TABLE display_files ADD COLUMN xml_bytes BLOB;")
 
-    def _init_db_force(self):
-        with self._connect() as conn:
-            cur = conn.cursor()
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS display_files (
-                    display_name TEXT PRIMARY KEY,
-                    display_normalized TEXT,
-                    xml_bytes BLOB
-                )
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS hmi_elements (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    display_name TEXT,
-                    display_normalized TEXT,
-                    label_text TEXT,
-                    tags TEXT
-                )
-            """)
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_disp_files ON display_files(display_normalized)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_norm ON hmi_elements(display_normalized)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_disp ON hmi_elements(display_name)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_lbl ON hmi_elements(label_text)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_tags ON hmi_elements(tags)")
-            conn.commit()
+                # Automated Schema Migration for hmi_elements
+                cur.execute("PRAGMA table_info(hmi_elements);")
+                h_cols = [r[1] for r in cur.fetchall()]
+                if "display_normalized" not in h_cols:
+                    cur.execute("ALTER TABLE hmi_elements ADD COLUMN display_normalized TEXT;")
+
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_disp_files ON display_files(display_normalized)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_norm ON hmi_elements(display_normalized)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_disp ON hmi_elements(display_name)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_lbl ON hmi_elements(label_text)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_tags ON hmi_elements(tags)")
+                conn.commit()
 
     def normalize_display_name(self, name: str) -> str:
         base = os.path.splitext(name)[0]
@@ -548,6 +538,7 @@ class FTViewDatabaseHub:
         dedup_elements = set()
         rows_to_insert = []
 
+        # Single linear pass O(N) inspecting direct node attributes & immediate child nodes
         for elem in root.iter():
             texts = []
             cap = elem.attrib.get("caption")
@@ -556,6 +547,7 @@ class FTViewDatabaseHub:
                 if clean:
                     texts.append(clean)
 
+            # Direct children only (eliminates O(N^2) subtree scan churn)
             for sub_cap in elem.findall("./caption") + elem.findall("./up/caption") + elem.findall("./state/caption"):
                 sc = sub_cap.attrib.get("caption", "").strip()
                 if sc and sc not in texts:
@@ -1781,27 +1773,39 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
 
 
 def main():
-    db = FTViewDatabaseHub()
-    bridge = DesktopAppBridge(db)
+    single_lock = SingleInstanceLock()
+    if not single_lock.acquire():
+        print("Another instance of HMITagFinder is already running.")
+        sys.exit(0)
 
-    window = webview.create_window(
-        title="HMITagFinder - Created by Luis Castillo",
-        html=MAIN_PORTAL_HTML,
-        js_api=bridge,
-        width=1360,
-        height=860,
-        resizable=True,
-        text_select=True,
-    )
-    bridge.window = window
-    webview.start(debug=True)
+    try:
+        db = FTViewDatabaseHub()
+        bridge = DesktopAppBridge(db)
+
+        window = webview.create_window(
+            title="HMITagFinder - Created by Luis Castillo",
+            html=MAIN_PORTAL_HTML,
+            js_api=bridge,
+            width=1360,
+            height=860,
+            resizable=True,
+            text_select=True,
+        )
+        bridge.window = window
+        webview.start(debug=True)
+    finally:
+        single_lock.release()
 
 
 if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        with open("HMITagFinder_crash.txt", "w", encoding="utf-8") as f:
-            traceback.print_exc(file=f)
+        log_path = os.path.join(get_app_data_path(), "HMITagFinder_crash.txt")
+        try:
+            with open(log_path, "w", encoding="utf-8") as f:
+                traceback.print_exc(file=f)
+        except Exception:
+            pass
         traceback.print_exc()
-        input("Critical crash captured. Press Enter to close...")
+        input("Critical crash captured in APPDATA. Press Enter to close...")
