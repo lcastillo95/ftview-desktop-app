@@ -393,6 +393,13 @@ class FTViewDatabaseHub:
       try:
         cur = conn.cursor()
         cur.execute("""
+                    CREATE TABLE IF NOT EXISTS display_files (
+                        display_name TEXT PRIMARY KEY,
+                        display_normalized TEXT,
+                        xml_bytes BLOB
+                    )
+                """)
+        cur.execute("""
                     CREATE TABLE IF NOT EXISTS hmi_elements (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         display_name TEXT,
@@ -401,12 +408,10 @@ class FTViewDatabaseHub:
                         tags TEXT
                     )
                 """)
-        cur.execute("""
-                    CREATE TABLE IF NOT EXISTS display_files (
-                        display_name TEXT PRIMARY KEY,
-                        xml_bytes BLOB
-                    )
-                """)
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_disp_files ON"
+            " display_files(display_normalized)"
+        )
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_norm ON"
             " hmi_elements(display_normalized)"
@@ -520,9 +525,11 @@ class FTViewDatabaseHub:
       try:
         cur = conn.cursor()
         cur.execute(
-            "INSERT OR REPLACE INTO display_files (display_name, xml_bytes)"
-            " VALUES (?, ?)",
-            (display_name, xml_bytes),
+            """
+                    INSERT OR REPLACE INTO display_files (display_name, display_normalized, xml_bytes)
+                    VALUES (?, ?, ?)
+                """,
+            (display_name, norm_name, xml_bytes),
         )
         cur.execute(
             "DELETE FROM hmi_elements WHERE display_name = ?", (display_name,)
@@ -559,11 +566,11 @@ class FTViewDatabaseHub:
       conn = self._connect()
       try:
         cur = conn.cursor()
-        cur.execute(
-            "SELECT COUNT(DISTINCT display_name), COUNT(*) FROM hmi_elements"
-        )
-        displays_count, elements_count = cur.fetchone()
-        return {"displays": displays_count or 0, "elements": elements_count or 0}
+        cur.execute("SELECT COUNT(*) FROM display_files")
+        displays_count = cur.fetchone()[0] or 0
+        cur.execute("SELECT COUNT(*) FROM hmi_elements")
+        elements_count = cur.fetchone()[0] or 0
+        return {"displays": displays_count, "elements": elements_count}
       finally:
         conn.close()
 
@@ -586,8 +593,8 @@ class FTViewDatabaseHub:
       try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT DISTINCT display_name, display_normalized FROM hmi_elements"
-            " ORDER BY display_name"
+            "SELECT display_name, display_normalized FROM display_files ORDER"
+            " BY display_name"
         )
         rows = cur.fetchall()
         return [
@@ -597,21 +604,22 @@ class FTViewDatabaseHub:
         conn.close()
 
   def search_by_display(self, query: str = ""):
-    if not query or not isinstance(query, str) or not query.strip():
+    query_str = (query or "").strip()
+    if not query_str:
       return self.get_all_displays()
 
-    norm_q = self.normalize_display_name(query)
+    norm_q = self.normalize_display_name(query_str)
     with self.lock:
       conn = self._connect()
       try:
         cur = conn.cursor()
         cur.execute(
             """
-                    SELECT DISTINCT display_name, display_normalized FROM hmi_elements 
+                    SELECT display_name, display_normalized FROM display_files 
                     WHERE display_normalized LIKE ? OR display_name LIKE ?
-                    ORDER BY display_name LIMIT 60
+                    ORDER BY display_name LIMIT 100
                     """,
-            (f"%{norm_q}%", f"%{query}%"),
+            (f"%{norm_q}%", f"%{query_str}%"),
         )
         rows = cur.fetchall()
         return [
@@ -621,7 +629,8 @@ class FTViewDatabaseHub:
         conn.close()
 
   def search_by_label(self, query: str = ""):
-    if not query or not isinstance(query, str) or not query.strip():
+    query_str = (query or "").strip()
+    if not query_str:
       return []
     with self.lock:
       conn = self._connect()
@@ -632,9 +641,9 @@ class FTViewDatabaseHub:
                     SELECT display_name, label_text, tags 
                     FROM hmi_elements 
                     WHERE label_text LIKE ? 
-                    ORDER BY display_name LIMIT 60
+                    ORDER BY display_name LIMIT 100
                     """,
-            (f"%{query}%",),
+            (f"%{query_str}%",),
         )
         rows = cur.fetchall()
         return [
@@ -645,7 +654,8 @@ class FTViewDatabaseHub:
         conn.close()
 
   def search_by_tag(self, query: str = ""):
-    if not query or not isinstance(query, str) or not query.strip():
+    query_str = (query or "").strip()
+    if not query_str:
       return []
     with self.lock:
       conn = self._connect()
@@ -656,9 +666,9 @@ class FTViewDatabaseHub:
                     SELECT display_name, label_text, tags 
                     FROM hmi_elements 
                     WHERE tags LIKE ? 
-                    ORDER BY display_name LIMIT 60
+                    ORDER BY display_name LIMIT 100
                     """,
-            (f"%{query}%",),
+            (f"%{query_str}%",),
         )
         rows = cur.fetchall()
         return [
@@ -683,6 +693,15 @@ class DesktopAppBridge:
         "done": False,
         "displays": 0,
         "elements": 0,
+    }
+
+  def get_initial_data(self):
+    summary = self.db.get_summary()
+    displays = self.db.get_all_displays()
+    return {
+        "displays_count": summary["displays"],
+        "elements_count": summary["elements"],
+        "displays": displays,
     }
 
   def open_import_dialog(self):
@@ -734,23 +753,17 @@ class DesktopAppBridge:
   def get_import_status(self):
     return self.import_state
 
-  def get_initial_stats(self):
-    return self.db.get_summary()
-
-  def get_all_displays(self):
-    return self.db.get_all_displays()
-
   def clear_database(self):
     return self.db.clear_database()
 
   def search_displays(self, query=""):
-    return self.db.search_by_display(query or "")
+    return self.db.search_by_display(query)
 
   def search_labels(self, query=""):
-    return self.db.search_by_label(query or "")
+    return self.db.search_by_label(query)
 
   def search_tags(self, query=""):
-    return self.db.search_by_tag(query or "")
+    return self.db.search_by_tag(query)
 
   def get_screen_render_data(self, display_name):
     xml_bytes = self.db.get_xml_bytes(display_name)
@@ -1319,34 +1332,31 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
         let pollTimer = null;
         let currentDisplayLoading = null;
         let renderTimeoutTimer = null;
-        let isInitialized = false;
+        let initialLoadDone = false;
 
-        async function initApp() {
-            if (isInitialized) return;
-            if (!window.pywebview || !window.pywebview.api) return;
+        async function tryInitialLoad() {
+            if (initialLoadDone) return;
+            if (!window.pywebview || !window.pywebview.api || !window.pywebview.api.get_initial_data) {
+                return;
+            }
 
-            isInitialized = true;
             try {
-                const stats = await window.pywebview.api.get_initial_stats();
-                if (stats) {
-                    document.getElementById('stat-displays').textContent = stats.displays;
-                    document.getElementById('stat-elements').textContent = stats.elements;
+                const data = await window.pywebview.api.get_initial_data();
+                if (data) {
+                    initialLoadDone = true;
+                    clearInterval(initInterval);
+                    document.getElementById('stat-displays').textContent = data.displays_count;
+                    document.getElementById('stat-elements').textContent = data.elements_count;
+                    renderDisplaysTable(data.displays);
                 }
-                const initialDisplays = await window.pywebview.api.get_all_displays();
-                renderDisplaysTable(initialDisplays);
             } catch (e) {
-                console.error("Init stats error", e);
+                console.warn("Retrying initial load...", e);
             }
         }
 
-        const checkBridgeInterval = setInterval(() => {
-            if (window.pywebview && window.pywebview.api) {
-                clearInterval(checkBridgeInterval);
-                initApp();
-            }
-        }, 50);
-
-        window.addEventListener('pywebviewready', initApp);
+        const initInterval = setInterval(tryInitialLoad, 100);
+        window.addEventListener('pywebviewready', tryInitialLoad);
+        document.addEventListener('DOMContentLoaded', tryInitialLoad);
 
         function renderDisplaysTable(results) {
             const tbody = document.getElementById('table-body');
@@ -1392,7 +1402,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             clearTimeout(searchDebounceTimer);
             searchDebounceTimer = setTimeout(() => {
                 performSearch(val);
-            }, 250);
+            }, 200);
         }
 
         async function startLoadingBatch() {
@@ -1454,7 +1464,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
 
             try {
                 if (currentTab === 'displays') {
-                    const results = cleanQuery ? await window.pywebview.api.search_displays(cleanQuery) : await window.pywebview.api.get_all_displays();
+                    const results = await window.pywebview.api.search_displays(cleanQuery);
                     renderDisplaysTable(results);
 
                 } else if (currentTab === 'labels') {
@@ -1702,6 +1712,7 @@ def main():
       text_select=True,
   )
   bridge.window = window
+
   webview.start()
 
 
