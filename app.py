@@ -22,7 +22,7 @@ def get_app_data_path() -> str:
 
 
 def safe_parse_xml(xml_bytes: bytes) -> ET.Element:
-    """Decodes FactoryTalk View Studio XML exports (Windows-1252, UTF-8-SIG, ISO-8859-1) safely."""
+    """Decodes FactoryTalk View Studio XML exports across all encodings safely."""
     xml_str = None
     for enc in ("utf-8-sig", "windows-1252", "utf-8", "iso-8859-1", "latin-1", "utf-16"):
         try:
@@ -34,7 +34,7 @@ def safe_parse_xml(xml_bytes: bytes) -> ET.Element:
     if xml_str is None:
         xml_str = xml_bytes.decode("latin-1", errors="replace")
 
-    # Normalize XML declaration to UTF-8 so expat parser never fails on Windows-1252 header
+    # Normalize XML declaration to UTF-8 so expat parser never fails on Windows-1252 headers
     xml_str = re.sub(
         r'<\?xml([^>]+)encoding=["\'][^"\']+["\']',
         r'<?xml\1encoding="UTF-8"',
@@ -164,6 +164,7 @@ class FlattenedFTViewCompiler:
 
         tag_attr = self._build_tag_attr(elem_tags)
 
+        # 1. Multi-State Indicators
         if tag in ("multistateIndicator", "pilotedListIndicator"):
             x = round(float(elem.attrib.get("left", 0)), 1)
             y = round(float(elem.attrib.get("top", 0)), 1)
@@ -209,6 +210,7 @@ class FlattenedFTViewCompiler:
             out.append("</g>")
             return "".join(out)
 
+        # 2. Rectangles, Rounded Rectangles & Panels
         elif tag in ("rectangle", "roundedRectangle", "panel"):
             x = round(float(elem.attrib.get("left", 0)), 1)
             y = round(float(elem.attrib.get("top", 0)), 1)
@@ -222,6 +224,7 @@ class FlattenedFTViewCompiler:
             rx_attr = f'rx="{rx}" ry="{rx}"' if rx > 0 else ""
             return f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{fill}" stroke="{stroke}" stroke-width="{lw}" {rx_attr} {tf} {tag_attr}/>'
 
+        # 3. Lines
         elif tag == "line":
             pts = elem.attrib.get("line", "").strip().split()
             if len(pts) >= 4:
@@ -229,6 +232,7 @@ class FlattenedFTViewCompiler:
                 lw = elem.attrib.get("lineWidth", "1")
                 return f'<line x1="{pts[0]}" y1="{pts[1]}" x2="{pts[2]}" y2="{pts[3]}" stroke="{stroke}" stroke-width="{lw}" stroke-linecap="square" {tf} {tag_attr}/>'
 
+        # 4. Polygons & Polylines
         elif tag in ("polygon", "polyline"):
             raw = elem.attrib.get("path", "").strip().split()
             if len(raw) >= 4:
@@ -239,6 +243,7 @@ class FlattenedFTViewCompiler:
                 tag_name = "polygon" if tag == "polygon" else "polyline"
                 return f'<{tag_name} points="{coords}" fill="{fill}" stroke="{stroke}" stroke-width="{lw}" {tf} {tag_attr}/>'
 
+        # 5. Ellipses & Circles
         elif tag in ("ellipse", "circle"):
             l = round(float(elem.attrib.get("left", 0)), 1)
             t_pos = round(float(elem.attrib.get("top", 0)), 1)
@@ -251,6 +256,7 @@ class FlattenedFTViewCompiler:
             lw = elem.attrib.get("lineWidth", "1")
             return f'<ellipse cx="{cx}" cy="{cy}" rx="{rx}" ry="{ry}" fill="{fill}" stroke="{stroke}" stroke-width="{lw}" {tf} {tag_attr}/>'
 
+        # 6. Arcs
         elif tag == "arc":
             l = round(float(elem.attrib.get("left", 0)), 1)
             t_pos = round(float(elem.attrib.get("top", 0)), 1)
@@ -275,6 +281,7 @@ class FlattenedFTViewCompiler:
                 sweep = 0 if end > start else 1
                 return f'<path d="M {x1} {y1} A {rx} {ry} 0 {large_arc} {sweep} {x2} {y2}" fill="none" stroke="{stroke}" stroke-width="{lw}" {tf} {tag_attr}/>'
 
+        # 7. Text
         elif tag == "text":
             x = round(float(elem.attrib.get("left", 0)), 1)
             y = round(float(elem.attrib.get("top", 0)), 1)
@@ -301,6 +308,7 @@ class FlattenedFTViewCompiler:
                 )
             return f"<g {tf} {tag_attr}>" + "".join(tspans) + "</g>"
 
+        # 8. All Pushbuttons
         elif tag in ("button", "momentaryButton", "maintainedButton", "latchedButton", "interlockingButton", "rampButton", "numericInputCursorButton"):
             x = round(float(elem.attrib.get("left", 0)), 1)
             y = round(float(elem.attrib.get("top", 0)), 1)
@@ -330,6 +338,7 @@ class FlattenedFTViewCompiler:
             out.append("</g>")
             return "".join(out)
 
+        # 9. Numeric/String Inputs and Displays
         elif tag in ("numericDisplay", "stringDisplay", "numericInput", "stringInput"):
             x = round(float(elem.attrib.get("left", 0)), 1)
             y = round(float(elem.attrib.get("top", 0)), 1)
@@ -352,6 +361,7 @@ class FlattenedFTViewCompiler:
                 f"</g>"
             )
 
+        # 10. Gauges, Trends & Bar Graphs
         elif tag in ("barGraph", "gauge", "trend"):
             x = round(float(elem.attrib.get("left", 0)), 1)
             y = round(float(elem.attrib.get("top", 0)), 1)
@@ -366,6 +376,7 @@ class FlattenedFTViewCompiler:
                 f"</g>"
             )
 
+        # 11. Images & Symbols
         elif tag in ("image", "symbol"):
             x = round(float(elem.attrib.get("left", 0)), 1)
             y = round(float(elem.attrib.get("top", 0)), 1)
