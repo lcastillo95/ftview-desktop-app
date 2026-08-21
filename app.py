@@ -58,20 +58,25 @@ class FlattenedFTViewCompiler:
     if name:
       info.append(f"Name: {name}")
 
+    # Tag extraction pattern supporting FactoryTalk parameters (#1), Area shortcuts, and direct PLC brackets
+    tag_pattern = r"\{([A-Za-z0-9_#/@\.\:\[\]\-\s\$\%]+)\}"
+
     for k, v in elem.attrib.items():
       if isinstance(v, str):
-        for tag_match in re.findall(r"\{(\/[A-Za-z0-9_]+/[^\}]+)\}", v):
-          info.append(f"Tag: {tag_match}")
+        for tag_match in re.findall(tag_pattern, v):
+          clean_t = tag_match.strip()
+          if clean_t and not clean_t.isdigit():
+            info.append(f"Tag: {clean_t}")
 
     for conn in elem.findall("./connections/connection"):
-      expr = conn.attrib.get("expression")
+      expr = conn.attrib.get("expression") or conn.attrib.get("tag")
       conn_name = conn.attrib.get("name", "Value")
       if expr:
         info.append(f"Conn ({conn_name}): {expr}")
 
     for anim in elem.findall("./animations/*"):
       anim_type = anim.tag.replace("animate", "")
-      expr = anim.attrib.get("expression")
+      expr = anim.attrib.get("expression") or anim.attrib.get("tag")
       rel = anim.attrib.get("releaseAction")
       prs = anim.attrib.get("pressAction")
       if expr:
@@ -117,11 +122,13 @@ class FlattenedFTViewCompiler:
 
     tag_attr = self._build_tag_attr(elem_tags)
 
-    if tag == "multistateIndicator":
+    # 1. Multi-State Indicators
+    if tag in ("multistateIndicator", "pilotedListIndicator"):
       x = round(float(elem.attrib.get("left", 0)), 1)
       y = round(float(elem.attrib.get("top", 0)), 1)
       w = round(float(elem.attrib.get("width", 0)), 1)
       h = round(float(elem.attrib.get("height", 0)), 1)
+
       conn = elem.find(".//connection")
       tag_expr = conn.attrib.get("expression") if conn is not None else None
       active_id = str(
@@ -198,7 +205,8 @@ class FlattenedFTViewCompiler:
       out.append("</g>")
       return "".join(out)
 
-    elif tag == "rectangle":
+    # 2. Rectangles, Rounded Rectangles & Panels
+    elif tag in ("rectangle", "roundedRectangle", "panel"):
       x = round(float(elem.attrib.get("left", 0)), 1)
       y = round(float(elem.attrib.get("top", 0)), 1)
       w = round(float(elem.attrib.get("width", 0)), 1)
@@ -207,11 +215,15 @@ class FlattenedFTViewCompiler:
       fill = "none" if is_trans else elem.attrib.get("backColor", "#FFFFFF")
       stroke = elem.attrib.get("foreColor", "none") if not is_trans else "none"
       lw = elem.attrib.get("lineWidth", "1")
+      rx = round(float(elem.attrib.get("cornerRadius", 0)), 1)
+      rx_attr = f'rx="{rx}" ry="{rx}"' if rx > 0 else ""
       return (
           f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{fill}"'
-          f' stroke="{stroke}" stroke-width="{lw}" {tf} {tag_attr}/>'
+          f' stroke="{stroke}" stroke-width="{lw}" {rx_attr} {tf}'
+          f" {tag_attr}/>"
       )
 
+    # 3. Lines
     elif tag == "line":
       pts = elem.attrib.get("line", "").strip().split()
       if len(pts) >= 4:
@@ -227,24 +239,83 @@ class FlattenedFTViewCompiler:
             f" {tf} {tag_attr}/>"
         )
 
+    # 4. Polygons & Polylines
     elif tag in ("polygon", "polyline"):
       raw = elem.attrib.get("path", "").strip().split()
-      coords = " ".join(
-          [f"{raw[i]},{raw[i+1]}" for i in range(0, len(raw) - 1, 2)]
-      )
+      if len(raw) >= 4:
+        coords = " ".join(
+            [f"{raw[i]},{raw[i+1]}" for i in range(0, len(raw) - 1, 2)]
+        )
+        fill = (
+            elem.attrib.get("backColor", "#999999")
+            if tag == "polygon"
+            else "none"
+        )
+        stroke = elem.attrib.get("foreColor", "#000000")
+        lw = elem.attrib.get("lineWidth", "1")
+        tag_name = "polygon" if tag == "polygon" else "polyline"
+        return (
+            f'<{tag_name} points="{coords}" fill="{fill}" stroke="{stroke}"'
+            f' stroke-width="{lw}" {tf} {tag_attr}/>'
+        )
+
+    # 5. Ellipses & Circles
+    elif tag in ("ellipse", "circle"):
+      l = round(float(elem.attrib.get("left", 0)), 1)
+      t_pos = round(float(elem.attrib.get("top", 0)), 1)
+      w = round(float(elem.attrib.get("width", 0)), 1)
+      h = round(float(elem.attrib.get("height", 0)), 1)
+      rx, ry = round(w / 2, 1), round(h / 2, 1)
+      cx, cy = round(l + rx, 1), round(t_pos + ry, 1)
       fill = (
-          elem.attrib.get("backColor", "#999999")
-          if tag == "polygon"
+          elem.attrib.get("backColor", "#777777")
+          if elem.attrib.get("backStyle") != "transparent"
           else "none"
       )
       stroke = elem.attrib.get("foreColor", "#000000")
       lw = elem.attrib.get("lineWidth", "1")
-      tag_name = "polygon" if tag == "polygon" else "polyline"
       return (
-          f'<{tag_name} points="{coords}" fill="{fill}" stroke="{stroke}"'
-          f' stroke-width="{lw}" {tf} {tag_attr}/>'
+          f'<ellipse cx="{cx}" cy="{cy}" rx="{rx}" ry="{ry}" fill="{fill}"'
+          f' stroke="{stroke}" stroke-width="{lw}" {tf} {tag_attr}/>'
       )
 
+    # 6. Arcs
+    elif tag == "arc":
+      l = round(float(elem.attrib.get("left", 0)), 1)
+      t_pos = round(float(elem.attrib.get("top", 0)), 1)
+      w = round(float(elem.attrib.get("width", 0)), 1)
+      h = round(float(elem.attrib.get("height", 0)), 1)
+      start = float(elem.attrib.get("startAngle", 0))
+      end = float(elem.attrib.get("endAngle", 0))
+      rx, ry = w / 2, h / 2
+      cx, cy = l + rx, t_pos + ry
+      stroke = elem.attrib.get("foreColor", "#000000")
+      lw = elem.attrib.get("lineWidth", "1")
+
+      if abs(start - end) < 0.001 or abs(abs(end - start) - 2 * math.pi) < 0.01:
+        fill = (
+            elem.attrib.get("backColor", "#777777")
+            if elem.attrib.get("backStyle") != "transparent"
+            else "none"
+        )
+        return (
+            f'<ellipse cx="{cx}" cy="{cy}" rx="{rx}" ry="{ry}" fill="{fill}"'
+            f' stroke="{stroke}" stroke-width="{lw}" {tf} {tag_attr}/>'
+        )
+      else:
+        x1 = round(cx + rx * math.cos(start), 1)
+        y1 = round(cy - ry * math.sin(start), 1)
+        x2 = round(cx + rx * math.cos(end), 1)
+        y2 = round(cy - ry * math.sin(end), 1)
+        large_arc = 1 if abs(end - start) > math.pi else 0
+        sweep = 0 if end > start else 1
+        return (
+            f'<path d="M {x1} {y1} A {rx} {ry} 0 {large_arc} {sweep} {x2} {y2}"'
+            f' fill="none" stroke="{stroke}" stroke-width="{lw}" {tf}'
+            f" {tag_attr}/>"
+        )
+
+    # 7. Text
     elif tag == "text":
       x = round(float(elem.attrib.get("left", 0)), 1)
       y = round(float(elem.attrib.get("top", 0)), 1)
@@ -276,7 +347,16 @@ class FlattenedFTViewCompiler:
         )
       return f"<g {tf} {tag_attr}>" + "".join(tspans) + "</g>"
 
-    elif tag == "button":
+    # 8. All Pushbutton Variations
+    elif tag in (
+        "button",
+        "momentaryButton",
+        "maintainedButton",
+        "latchedButton",
+        "interlockingButton",
+        "rampButton",
+        "numericInputCursorButton",
+    ):
       x = round(float(elem.attrib.get("left", 0)), 1)
       y = round(float(elem.attrib.get("top", 0)), 1)
       w = round(float(elem.attrib.get("width", 0)), 1)
@@ -317,53 +397,125 @@ class FlattenedFTViewCompiler:
       out.append("</g>")
       return "".join(out)
 
-    elif tag in ("numericDisplay", "stringDisplay"):
+    # 9. Numeric/String Inputs and Displays
+    elif tag in (
+        "numericDisplay",
+        "stringDisplay",
+        "numericInput",
+        "stringInput",
+    ):
       x = round(float(elem.attrib.get("left", 0)), 1)
       y = round(float(elem.attrib.get("top", 0)), 1)
       w = round(float(elem.attrib.get("width", 0)), 1)
       h = round(float(elem.attrib.get("height", 0)), 1)
       size = int(elem.attrib.get("charHeight", 12))
       fg = elem.attrib.get("foreColor", "#000000")
+      bg = elem.attrib.get("backColor", "#FFFFFF")
       conn = elem.find(".//connection")
       expr = conn.attrib.get("expression", "") if conn is not None else ""
       val = str(self.tag_overrides.get(expr, "0.0"))
+      is_input = "Input" in tag
+      border_stroke = "#000000" if is_input else "none"
       return (
+          f"<g {tf} {tag_attr}>"
+          f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{bg}"'
+          f' stroke="{border_stroke}" stroke-width="1"/>'
           f'<text x="{round(x + w/2, 1)}" y="{round(y + h/2 + size/3, 1)}"'
           ' font-family="Consolas, monospace" font-size="{size}px"'
           f' font-weight="bold" fill="{fg}" text-anchor="middle"'
-          f' text-rendering="geometricPrecision" {tf} {tag_attr}>{val}</text>'
+          f' text-rendering="geometricPrecision">{val}</text>'
+          "</g>"
+      )
+
+    # 10. Gauges & Bar Graphs
+    elif tag in ("barGraph", "gauge", "trend"):
+      x = round(float(elem.attrib.get("left", 0)), 1)
+      y = round(float(elem.attrib.get("top", 0)), 1)
+      w = round(float(elem.attrib.get("width", 0)), 1)
+      h = round(float(elem.attrib.get("height", 0)), 1)
+      bg = elem.attrib.get("backColor", "#1a1a1a")
+      label = tag.upper()
+      return (
+          f"<g {tf} {tag_attr}>"
+          f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{bg}"'
+          ' stroke="#FFFFFF" stroke-width="1"/>'
+          f'<text x="{round(x + w/2, 1)}" y="{round(y + h/2, 1)}"'
+          ' font-family="Consolas, monospace" font-size="10px" fill="#888888"'
+          f' text-anchor="middle">[{label}]</text>'
+          "</g>"
+      )
+
+    # 11. Images & Symbols
+    elif tag in ("image", "symbol"):
+      x = round(float(elem.attrib.get("left", 0)), 1)
+      y = round(float(elem.attrib.get("top", 0)), 1)
+      w = round(float(elem.attrib.get("width", 0)), 1)
+      h = round(float(elem.attrib.get("height", 0)), 1)
+      name = elem.attrib.get("imageName") or elem.attrib.get("name") or "SYMBOL"
+      return (
+          f"<g {tf} {tag_attr}>"
+          f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="#111111"'
+          ' stroke="#555555" stroke-width="1" stroke-dasharray="2,2"/>'
+          f'<text x="{round(x + w/2, 1)}" y="{round(y + h/2, 1)}"'
+          ' font-family="Consolas, monospace" font-size="9px" fill="#AAAAAA"'
+          f' text-anchor="middle">{html.escape(name)}</text>'
+          "</g>"
+      )
+
+    # 12. Fallback for any standard visual container
+    elif "left" in elem.attrib and "top" in elem.attrib:
+      x = round(float(elem.attrib.get("left", 0)), 1)
+      y = round(float(elem.attrib.get("top", 0)), 1)
+      w = round(float(elem.attrib.get("width", 10)), 1)
+      h = round(float(elem.attrib.get("height", 10)), 1)
+      return (
+          f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="none"'
+          f' stroke="none" {tf} {tag_attr}/>'
       )
 
     return ""
 
-  def _flatten_and_render(self, node, accumulated_tags: list) -> list:
-    rendered_elements = []
+  def _render_node(self, node, accumulated_tags: list) -> list:
+    """Recursive hierarchy walker that preserves group matrix transforms."""
     if node.tag in (
         "displaySettings",
         "vbaProject",
-        "animations",
+        "parameters",
+        "securitySettings",
         "connections",
+        "animations",
         "transform",
     ):
-      return rendered_elements
+      return []
+
     current_tags = list(accumulated_tags)
     for lt in self._extract_local_tags(node):
       if lt not in current_tags:
         current_tags.append(lt)
 
+    # If it's a group, wrap children inside a <g> that preserves the group's transform matrix
     if node.tag == "group":
+      tf = self._get_transform(node)
+      tag_attr = self._build_tag_attr(current_tags)
+      children_markup = []
       for child in node:
-        rendered_elements.extend(self._flatten_and_render(child, current_tags))
+        children_markup.extend(self._render_node(child, current_tags))
+
+      if children_markup:
+        return [
+            f"<g {tf} {tag_attr}>\n"
+            + "\n  ".join(children_markup)
+            + "\n</g>"
+        ]
+      return []
     else:
-      svg_markup = self._render_primitive(node, current_tags)
-      if svg_markup:
-        rendered_elements.append(svg_markup)
-    return rendered_elements
+      rendered = self._render_primitive(node, current_tags)
+      return [rendered] if rendered else []
 
   def compile_svg_bundle(self) -> dict:
     all_primitives = []
     for child in self.root:
-      all_primitives.extend(self._flatten_and_render(child, []))
+      all_primitives.extend(self._render_node(child, []))
     return {
         "svg": "\n  ".join(all_primitives),
         "width": self.width,
@@ -379,86 +531,66 @@ class FTViewDatabaseHub:
     self.lock = threading.RLock()
     app_dir = get_app_data_path()
     self.db_path = os.path.join(app_dir, "hmitagfinder.db")
-    self._init_db()
 
-  def _connect(self):
-    conn = sqlite3.connect(self.db_path, timeout=30.0)
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA synchronous=NORMAL;")
-    return conn
+    self.conn = sqlite3.connect(
+        self.db_path, timeout=30.0, check_same_thread=False
+    )
+    self.conn.execute("PRAGMA journal_mode=WAL;")
+    self.conn.execute("PRAGMA synchronous=NORMAL;")
+    self.conn.execute("PRAGMA busy_timeout=30000;")
+    self._init_db()
 
   def _init_db(self):
     with self.lock:
-      conn = self._connect()
-      try:
-        cur = conn.cursor()
-        # 1. Base table creation
-        cur.execute("""
-                    CREATE TABLE IF NOT EXISTS display_files (
-                        display_name TEXT PRIMARY KEY,
-                        display_normalized TEXT,
-                        xml_bytes BLOB
-                    )
-                """)
-        cur.execute("""
-                    CREATE TABLE IF NOT EXISTS hmi_elements (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        display_name TEXT,
-                        display_normalized TEXT,
-                        label_text TEXT,
-                        tags TEXT
-                    )
-                """)
+      cur = self.conn.cursor()
+      cur.execute("""
+                CREATE TABLE IF NOT EXISTS display_files (
+                    display_name TEXT PRIMARY KEY,
+                    display_normalized TEXT,
+                    xml_bytes BLOB
+                )
+            """)
+      cur.execute("""
+                CREATE TABLE IF NOT EXISTS hmi_elements (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    display_name TEXT,
+                    display_normalized TEXT,
+                    label_text TEXT,
+                    tags TEXT
+                )
+            """)
 
-        # 2. Automated Schema Migration: check columns and add if missing
-        cur.execute("PRAGMA table_info(display_files);")
-        df_cols = [row[1] for row in cur.fetchall()]
-        if "display_normalized" not in df_cols:
-          cur.execute(
-              "ALTER TABLE display_files ADD COLUMN display_normalized TEXT;"
-          )
+      # Schema upgrades
+      cur.execute("PRAGMA table_info(display_files);")
+      df_cols = [row[1] for row in cur.fetchall()]
+      if "display_normalized" not in df_cols:
+        cur.execute(
+            "ALTER TABLE display_files ADD COLUMN display_normalized TEXT;"
+        )
 
-        cur.execute("PRAGMA table_info(hmi_elements);")
-        he_cols = [row[1] for row in cur.fetchall()]
-        if "display_normalized" not in he_cols:
-          cur.execute(
-              "ALTER TABLE hmi_elements ADD COLUMN display_normalized TEXT;"
-          )
+      cur.execute("PRAGMA table_info(hmi_elements);")
+      he_cols = [row[1] for row in cur.fetchall()]
+      if "display_normalized" not in he_cols:
+        cur.execute(
+            "ALTER TABLE hmi_elements ADD COLUMN display_normalized TEXT;"
+        )
 
-        # 3. Backfill normalized identifiers if needed
-        cur.execute(
-            "SELECT display_name FROM display_files WHERE display_normalized IS"
-            " NULL OR display_normalized = ''"
-        )
-        unnorm_files = cur.fetchall()
-        for (dname,) in unnorm_files:
-          norm = self.normalize_display_name(dname)
-          cur.execute(
-              "UPDATE display_files SET display_normalized = ? WHERE"
-              " display_name = ?",
-              (norm, dname),
-          )
-
-        # 4. Safe index creation
-        cur.execute(
-            "CREATE INDEX IF NOT EXISTS idx_disp_files ON"
-            " display_files(display_normalized)"
-        )
-        cur.execute(
-            "CREATE INDEX IF NOT EXISTS idx_norm ON"
-            " hmi_elements(display_normalized)"
-        )
-        cur.execute(
-            "CREATE INDEX IF NOT EXISTS idx_disp ON hmi_elements(display_name)"
-        )
-        cur.execute(
-            "CREATE INDEX IF NOT EXISTS idx_lbl ON hmi_elements(label_text)"
-        )
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_tags ON hmi_elements(tags)")
-        conn.commit()
-        conn.execute("PRAGMA wal_checkpoint(PASSIVE);")
-      finally:
-        conn.close()
+      cur.execute(
+          "CREATE INDEX IF NOT EXISTS idx_disp_files ON"
+          " display_files(display_normalized)"
+      )
+      cur.execute(
+          "CREATE INDEX IF NOT EXISTS idx_norm ON"
+          " hmi_elements(display_normalized)"
+      )
+      cur.execute(
+          "CREATE INDEX IF NOT EXISTS idx_disp ON hmi_elements(display_name)"
+      )
+      cur.execute(
+          "CREATE INDEX IF NOT EXISTS idx_lbl ON hmi_elements(label_text)"
+      )
+      cur.execute("CREATE INDEX IF NOT EXISTS idx_tags ON hmi_elements(tags)")
+      self.conn.commit()
 
   def normalize_display_name(self, name: str) -> str:
     base = os.path.splitext(name)[0]
@@ -467,12 +599,16 @@ class FTViewDatabaseHub:
   def extract_ft_tags_from_text(self, text_val: str) -> list:
     if not text_val:
       return []
-    bracketed = re.findall(r"\{(\/[A-Za-z0-9_]+/[^\}]+)\}", text_val)
-    if bracketed:
-      return bracketed
-    if text_val.startswith("/") and "::" in text_val:
-      return [text_val.strip("{}")]
-    return []
+    tag_pattern = r"\{([A-Za-z0-9_#/@\.\:\[\]\-\s\$\%]+)\}"
+    bracketed = re.findall(tag_pattern, text_val)
+    results = []
+    for b in bracketed:
+      clean_b = b.strip()
+      if clean_b and not clean_b.isdigit() and clean_b not in results:
+        results.append(clean_b)
+    if not results and text_val.startswith("/") and "::" in text_val:
+      results.append(text_val.strip("{}"))
+    return results
 
   def parse_and_index_xml(self, file_path: str):
     display_name = os.path.basename(file_path)
@@ -509,7 +645,7 @@ class FTViewDatabaseHub:
               tags.append(t)
 
       for conn in elem.findall("./connections/connection"):
-        expr = conn.attrib.get("expression")
+        expr = conn.attrib.get("expression") or conn.attrib.get("tag")
         if expr:
           extracted = self.extract_ft_tags_from_text(expr)
           if extracted:
@@ -518,7 +654,7 @@ class FTViewDatabaseHub:
             tags.append(expr)
 
       for anim in elem.findall("./animations/*"):
-        expr = anim.attrib.get("expression")
+        expr = anim.attrib.get("expression") or anim.attrib.get("tag")
         if expr:
           extracted = self.extract_ft_tags_from_text(expr)
           if extracted:
@@ -553,87 +689,63 @@ class FTViewDatabaseHub:
         )
 
     with self.lock:
-      conn = self._connect()
-      try:
-        cur = conn.cursor()
-        cur.execute(
+      cur = self.conn.cursor()
+      cur.execute(
+          """
+                INSERT OR REPLACE INTO display_files (display_name, display_normalized, xml_bytes)
+                VALUES (?, ?, ?)
+            """,
+          (display_name, norm_name, xml_bytes),
+      )
+      cur.execute(
+          "DELETE FROM hmi_elements WHERE display_name = ?", (display_name,)
+      )
+      if rows_to_insert:
+        cur.executemany(
             """
-                    INSERT OR REPLACE INTO display_files (display_name, display_normalized, xml_bytes)
-                    VALUES (?, ?, ?)
-                """,
-            (display_name, norm_name, xml_bytes),
+                    INSERT INTO hmi_elements (display_name, display_normalized, label_text, tags)
+                    VALUES (?, ?, ?, ?)
+                    """,
+            rows_to_insert,
         )
-        cur.execute(
-            "DELETE FROM hmi_elements WHERE display_name = ?", (display_name,)
-        )
-        if rows_to_insert:
-          cur.executemany(
-              """
-                        INSERT INTO hmi_elements (display_name, display_normalized, label_text, tags)
-                        VALUES (?, ?, ?, ?)
-                        """,
-              rows_to_insert,
-          )
-        conn.commit()
-        conn.execute("PRAGMA wal_checkpoint(PASSIVE);")
-      finally:
-        conn.close()
+      self.conn.commit()
 
   def get_xml_bytes(self, display_name: str) -> bytes:
     with self.lock:
-      conn = self._connect()
-      try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT xml_bytes FROM display_files WHERE display_name = ?",
-            (display_name,),
-        )
-        row = cur.fetchone()
-        return row[0] if row else None
-      finally:
-        conn.close()
+      cur = self.conn.cursor()
+      cur.execute(
+          "SELECT xml_bytes FROM display_files WHERE display_name = ?",
+          (display_name,),
+      )
+      row = cur.fetchone()
+      return row[0] if row else None
 
   def get_summary(self):
     with self.lock:
-      conn = self._connect()
-      try:
-        cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM display_files")
-        displays_count = cur.fetchone()[0] or 0
-        cur.execute("SELECT COUNT(*) FROM hmi_elements")
-        elements_count = cur.fetchone()[0] or 0
-        return {"displays": displays_count, "elements": elements_count}
-      finally:
-        conn.close()
+      cur = self.conn.cursor()
+      cur.execute("SELECT COUNT(*) FROM display_files")
+      displays_count = cur.fetchone()[0] or 0
+      cur.execute("SELECT COUNT(*) FROM hmi_elements")
+      elements_count = cur.fetchone()[0] or 0
+      return {"displays": displays_count, "elements": elements_count}
 
   def clear_database(self):
     with self.lock:
-      conn = self._connect()
-      try:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM hmi_elements;")
-        cur.execute("DELETE FROM display_files;")
-        conn.commit()
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
-        return {"displays": 0, "elements": 0}
-      finally:
-        conn.close()
+      cur = self.conn.cursor()
+      cur.execute("DELETE FROM hmi_elements;")
+      cur.execute("DELETE FROM display_files;")
+      self.conn.commit()
+      return {"displays": 0, "elements": 0}
 
   def get_all_displays(self):
     with self.lock:
-      conn = self._connect()
-      try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT display_name, display_normalized FROM display_files ORDER"
-            " BY display_name"
-        )
-        rows = cur.fetchall()
-        return [
-            {"display_name": r[0], "display_normalized": r[1]} for r in rows
-        ]
-      finally:
-        conn.close()
+      cur = self.conn.cursor()
+      cur.execute(
+          "SELECT display_name, display_normalized FROM display_files ORDER BY"
+          " display_name"
+      )
+      rows = cur.fetchall()
+      return [{"display_name": r[0], "display_normalized": r[1]} for r in rows]
 
   def search_by_display(self, query: str = ""):
     query_str = (query or "").strip()
@@ -642,73 +754,59 @@ class FTViewDatabaseHub:
 
     norm_q = self.normalize_display_name(query_str)
     with self.lock:
-      conn = self._connect()
-      try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-                    SELECT display_name, display_normalized FROM display_files 
-                    WHERE display_normalized LIKE ? OR display_name LIKE ?
-                    ORDER BY display_name LIMIT 100
-                    """,
-            (f"%{norm_q}%", f"%{query_str}%"),
-        )
-        rows = cur.fetchall()
-        return [
-            {"display_name": r[0], "display_normalized": r[1]} for r in rows
-        ]
-      finally:
-        conn.close()
+      cur = self.conn.cursor()
+      cur.execute(
+          """
+                SELECT display_name, display_normalized FROM display_files 
+                WHERE display_normalized LIKE ? OR display_name LIKE ?
+                ORDER BY display_name LIMIT 100
+                """,
+          (f"%{norm_q}%", f"%{query_str}%"),
+      )
+      rows = cur.fetchall()
+      return [{"display_name": r[0], "display_normalized": r[1]} for r in rows]
 
   def search_by_label(self, query: str = ""):
     query_str = (query or "").strip()
     if not query_str:
       return []
     with self.lock:
-      conn = self._connect()
-      try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-                    SELECT display_name, label_text, tags 
-                    FROM hmi_elements 
-                    WHERE label_text LIKE ? 
-                    ORDER BY display_name LIMIT 100
-                    """,
-            (f"%{query_str}%",),
-        )
-        rows = cur.fetchall()
-        return [
-            {"display_name": r[0], "label_text": r[1], "tags": r[2]}
-            for r in rows
-        ]
-      finally:
-        conn.close()
+      cur = self.conn.cursor()
+      cur.execute(
+          """
+                SELECT display_name, label_text, tags 
+                FROM hmi_elements 
+                WHERE label_text LIKE ? 
+                ORDER BY display_name LIMIT 100
+                """,
+          (f"%{query_str}%",),
+      )
+      rows = cur.fetchall()
+      return [
+          {"display_name": r[0], "label_text": r[1], "tags": r[2]}
+          for r in rows
+      ]
 
   def search_by_tag(self, query: str = ""):
     query_str = (query or "").strip()
     if not query_str:
       return []
     with self.lock:
-      conn = self._connect()
-      try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-                    SELECT display_name, label_text, tags 
-                    FROM hmi_elements 
-                    WHERE tags LIKE ? 
-                    ORDER BY display_name LIMIT 100
-                    """,
-            (f"%{query_str}%",),
-        )
-        rows = cur.fetchall()
-        return [
-            {"display_name": r[0], "label_text": r[1], "tags": r[2]}
-            for r in rows
-        ]
-      finally:
-        conn.close()
+      cur = self.conn.cursor()
+      cur.execute(
+          """
+                SELECT display_name, label_text, tags 
+                FROM hmi_elements 
+                WHERE tags LIKE ? 
+                ORDER BY display_name LIMIT 100
+                """,
+          (f"%{query_str}%",),
+      )
+      rows = cur.fetchall()
+      return [
+          {"display_name": r[0], "label_text": r[1], "tags": r[2]}
+          for r in rows
+      ]
 
 
 class DesktopAppBridge:
@@ -766,18 +864,25 @@ class DesktopAppBridge:
     }
 
     def worker():
-      for idx, fp in enumerate(file_paths):
-        fname = os.path.basename(fp)
-        self.import_state["current_file"] = fname
-        self.import_state["current_index"] = idx + 1
-        self.import_state["percent"] = int(((idx + 1) / total) * 100)
-        self.db.parse_and_index_xml(fp)
+      try:
+        for idx, fp in enumerate(file_paths):
+          fname = os.path.basename(fp)
+          self.import_state["current_file"] = fname
+          self.import_state["current_index"] = idx + 1
+          self.import_state["percent"] = int(((idx + 1) / total) * 100)
+          try:
+            self.db.parse_and_index_xml(fp)
+          except Exception as parse_err:
+            print(f"Error parsing {fname}: {parse_err}")
 
-      summary = self.db.get_summary()
-      self.import_state["displays"] = summary["displays"]
-      self.import_state["elements"] = summary["elements"]
-      self.import_state["done"] = True
-      self.import_state["active"] = False
+        summary = self.db.get_summary()
+        self.import_state["displays"] = summary["displays"]
+        self.import_state["elements"] = summary["elements"]
+      except Exception as worker_err:
+        print(f"Worker execution error: {worker_err}")
+      finally:
+        self.import_state["done"] = True
+        self.import_state["active"] = False
 
     threading.Thread(target=worker, daemon=True).start()
     return {"started": True, "total": total}
@@ -1366,6 +1471,10 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
         let renderTimeoutTimer = null;
         let initialLoadDone = false;
 
+        function escapeJsString(str) {
+            return (str || '').replace(/\\\\/g, '\\\\\\\\').replace(/'/g, "\\\\'");
+        }
+
         async function tryInitialLoad() {
             if (initialLoadDone) return;
             if (!window.pywebview || !window.pywebview.api || !window.pywebview.api.get_initial_data) {
@@ -1403,7 +1512,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
                 <tr>
                     <td><b>${r.display_name}</b></td>
                     <td style="font-family: 'Consolas', monospace; color: #AAAAAA;">${r.display_normalized}</td>
-                    <td><span class="screen-link" onclick="openScreen('${r.display_name}')">[ Launch Screen ]</span></td>
+                    <td><span class="screen-link" onclick="openScreen('${escapeJsString(r.display_name)}')">[ Launch Screen ]</span></td>
                 </tr>
             `).join('');
         }
@@ -1438,7 +1547,15 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
         }
 
         async function startLoadingBatch() {
-            const resp = await window.pywebview.api.open_import_dialog();
+            let resp;
+            try {
+                resp = await window.pywebview.api.open_import_dialog();
+            } catch (e) {
+                console.error("Open dialog error", e);
+                document.getElementById('progress-modal').style.display = 'none';
+                return;
+            }
+
             if (!resp || !resp.started) {
                 document.getElementById('progress-modal').style.display = 'none';
                 return;
@@ -1455,9 +1572,9 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
                     const st = await window.pywebview.api.get_import_status();
                     if (!st) return;
 
-                    document.getElementById('progress-status-file').textContent = st.current_file;
-                    document.getElementById('progress-status-count').textContent = st.current_index + ' / ' + st.total_files;
-                    document.getElementById('progress-fill').style.width = st.percent + '%';
+                    document.getElementById('progress-status-file').textContent = st.current_file || 'Processing...';
+                    document.getElementById('progress-status-count').textContent = (st.current_index || 0) + ' / ' + (st.total_files || resp.total);
+                    document.getElementById('progress-fill').style.width = (st.percent || 0) + '%';
 
                     if (st.done) {
                         clearInterval(pollTimer);
@@ -1482,10 +1599,14 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
 
         async function executeClearDatabase() {
             closeClearDatabaseModal();
-            const stats = await window.pywebview.api.clear_database();
-            document.getElementById('stat-displays').textContent = stats.displays;
-            document.getElementById('stat-elements').textContent = stats.elements;
-            await performSearch('');
+            try {
+                const stats = await window.pywebview.api.clear_database();
+                document.getElementById('stat-displays').textContent = stats.displays;
+                document.getElementById('stat-elements').textContent = stats.elements;
+                await performSearch('');
+            } catch (e) {
+                console.error("Clear DB error", e);
+            }
         }
 
         async function performSearch(query) {
@@ -1512,7 +1633,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
                     }
                     tbody.innerHTML = results.map(r => `
                         <tr>
-                            <td><span class="screen-link" onclick="openScreen('${r.display_name}')">${r.display_name}</span></td>
+                            <td><span class="screen-link" onclick="openScreen('${escapeJsString(r.display_name)}')">${r.display_name}</span></td>
                             <td class="text-preview">${escapeHtml(r.label_text)}</td>
                             <td>${formatTags(r.tags)}</td>
                         </tr>
@@ -1531,7 +1652,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
                     }
                     tbody.innerHTML = results.map(r => `
                         <tr>
-                            <td><span class="screen-link" onclick="openScreen('${r.display_name}')">${r.display_name}</span></td>
+                            <td><span class="screen-link" onclick="openScreen('${escapeJsString(r.display_name)}')">${r.display_name}</span></td>
                             <td>${formatTags(r.tags)}</td>
                             <td class="text-preview">${escapeHtml(r.label_text || '-')}</td>
                         </tr>
