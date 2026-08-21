@@ -604,13 +604,13 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>FactoryTalk View SE Analyzer</title>
+    <title>HMIFinder</title>
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
+        * { box-sizing: border-box; margin: 0; padding: 0; border-radius: 0px !important; }
         body {
-            background-color: #0f172a;
-            color: #f8fafc;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #000000;
+            color: #FFFFFF;
+            font-family: 'Courier New', Courier, monospace, sans-serif;
             display: flex;
             flex-direction: column;
             height: 100vh;
@@ -618,167 +618,169 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             user-select: text;
         }
         header {
-            background-color: #1e293b;
-            border-bottom: 1px solid #334155;
-            padding: 12px 24px;
+            background-color: #000000;
+            border-bottom: 2px solid #FFFFFF;
+            padding: 10px 16px;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
             z-index: 10;
         }
         .header-title { display: flex; flex-direction: column; }
-        .header-title h1 { font-size: 18px; font-weight: 700; color: #38bdf8; letter-spacing: -0.5px; }
-        .header-title .author-badge { font-size: 12px; color: #94a3b8; margin-top: 2px; }
-        .header-title .author-badge b { color: #f59e0b; }
+        .header-title h1 { font-size: 18px; font-weight: 700; color: #FFFFFF; letter-spacing: 1px; }
+        .header-title .author-badge { font-size: 12px; color: #AAAAAA; margin-top: 2px; }
+        .header-title .author-badge b { color: #FFFFFF; }
         .btn {
-            background-color: #0284c7;
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 6px;
-            font-size: 13px;
-            font-weight: 600;
+            background-color: #FFFFFF;
+            color: #000000;
+            border: 2px solid #FFFFFF;
+            padding: 6px 14px;
+            font-size: 12px;
+            font-weight: 700;
+            font-family: 'Courier New', Courier, monospace;
             cursor: pointer;
-            transition: all 0.2s ease;
+            text-transform: uppercase;
         }
-        .btn:hover { background-color: #0369a1; }
-        .btn-success { background-color: #10b981; }
-        .btn-success:hover { background-color: #059669; }
-        .btn-nav { background: #334155; color: #f1f5f9; }
-        .btn-nav:hover { background: #475569; }
+        .btn:hover { background-color: #000000; color: #FFFFFF; }
+        .btn-nav { background: #000000; color: #FFFFFF; border: 1px solid #FFFFFF; }
+        .btn-nav:hover { background: #FFFFFF; color: #000000; }
 
         .container { display: flex; flex: 1; overflow: hidden; position: relative; }
         
         .sidebar {
             width: 220px;
-            background: #182234;
-            border-right: 1px solid #334155;
+            background: #000000;
+            border-right: 2px solid #FFFFFF;
             display: flex;
             flex-direction: column;
-            padding: 16px 10px;
+            padding: 12px 8px;
             gap: 6px;
         }
         .nav-item {
             display: flex;
             align-items: center;
-            padding: 10px 14px;
-            border-radius: 6px;
-            color: #cbd5e1;
+            padding: 8px 10px;
+            color: #FFFFFF;
             font-size: 13px;
-            font-weight: 500;
+            font-weight: 700;
+            border: 1px solid transparent;
             cursor: pointer;
-            transition: all 0.15s ease;
         }
-        .nav-item:hover { background-color: #243248; color: #ffffff; }
-        .nav-item.active { background-color: #0284c7; color: #ffffff; font-weight: 600; }
+        .nav-item:hover { border: 1px solid #FFFFFF; }
+        .nav-item.active { background-color: #FFFFFF; color: #000000; border: 1px solid #FFFFFF; font-weight: 700; }
 
         .main-content {
             flex: 1;
             display: flex;
             flex-direction: column;
-            padding: 24px;
+            padding: 16px;
             overflow-y: auto;
+            background: #000000;
         }
-        .stats-bar { display: flex; gap: 16px; margin-bottom: 20px; }
+        .stats-bar { display: flex; gap: 12px; margin-bottom: 14px; }
         .stat-card {
-            background: #1e293b;
-            border: 1px solid #334155;
-            padding: 12px 18px;
-            border-radius: 8px;
+            background: #000000;
+            border: 1px solid #FFFFFF;
+            padding: 8px 14px;
             display: flex;
             flex-direction: column;
-            gap: 4px;
+            gap: 2px;
             min-width: 160px;
         }
-        .stat-label { font-size: 11px; text-transform: uppercase; color: #94a3b8; font-weight: 600; }
-        .stat-value { font-size: 20px; font-weight: 700; color: #38bdf8; }
+        .stat-label { font-size: 11px; text-transform: uppercase; color: #AAAAAA; font-weight: 700; }
+        .stat-value { font-size: 18px; font-weight: 700; color: #FFFFFF; }
 
-        .search-box-wrapper { margin-bottom: 16px; }
+        .search-box-wrapper { margin-bottom: 12px; }
         .search-input {
             width: 100%;
-            padding: 12px 16px;
-            background: #1e293b;
-            border: 1px solid #475569;
-            border-radius: 8px;
-            color: #f8fafc;
+            padding: 10px 12px;
+            background: #000000;
+            border: 2px solid #FFFFFF;
+            color: #FFFFFF;
             font-size: 14px;
+            font-family: 'Courier New', Courier, monospace;
             outline: none;
-            transition: border-color 0.2s;
         }
-        .search-input:focus { border-color: #38bdf8; box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2); }
+        .search-input:focus { background: #111111; }
 
         .results-container {
             flex: 1;
-            background: #1e293b;
-            border: 1px solid #334155;
-            border-radius: 8px;
+            background: #000000;
+            border: 2px solid #FFFFFF;
             overflow: auto;
         }
-        table { width: 100%; border-collapse: collapse; font-size: 13px; text-align: left; }
+        table { width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; }
         th {
-            background-color: #0f172a;
-            color: #94a3b8;
-            padding: 12px 16px;
-            font-weight: 600;
-            border-bottom: 1px solid #334155;
+            background-color: #FFFFFF;
+            color: #000000;
+            padding: 8px 12px;
+            font-weight: 700;
+            border-bottom: 2px solid #FFFFFF;
             position: sticky;
             top: 0;
             z-index: 2;
+            text-transform: uppercase;
         }
-        td { padding: 12px 16px; border-bottom: 1px solid #293548; color: #e2e8f0; vertical-align: top; }
-        tr:hover td { background-color: #243248; }
-        .screen-link { color: #38bdf8; font-weight: 600; cursor: pointer; text-decoration: underline; }
-        .screen-link:hover { color: #7dd3fc; }
+        td { padding: 8px 12px; border-bottom: 1px solid #333333; color: #FFFFFF; vertical-align: top; }
+        
+        /* Darker alternating rows */
+        tbody tr:nth-child(even) {
+            background-color: #141414;
+        }
+        tbody tr:nth-child(odd) {
+            background-color: #000000;
+        }
+        tbody tr:hover td {
+            background-color: #262626;
+        }
+
+        .screen-link { color: #FFFFFF; font-weight: 700; cursor: pointer; text-decoration: underline; }
+        .screen-link:hover { background-color: #FFFFFF; color: #000000; }
         .tag-pill {
             display: inline-block;
-            background: #090d16;
-            color: #38bdf8;
-            font-family: monospace;
+            background: #000000;
+            color: #FFFFFF;
+            font-family: 'Courier New', Courier, monospace;
             font-size: 11px;
-            padding: 3px 8px;
-            border-radius: 4px;
-            border: 1px solid #334155;
+            padding: 2px 6px;
+            border: 1px solid #777777;
             margin: 2px 0;
             word-break: break-all;
         }
-        .text-preview { white-space: pre-line; color: #cbd5e1; }
-        .empty-state { padding: 40px; text-align: center; color: #64748b; font-size: 14px; }
+        .text-preview { white-space: pre-line; color: #DDDDDD; }
+        .empty-state { padding: 30px; text-align: center; color: #888888; font-size: 13px; }
 
         /* Progress Bar Modal */
         #progress-modal {
             display: none;
             position: fixed;
             top: 0; left: 0; width: 100vw; height: 100vh;
-            background: rgba(0,0,0,0.75);
+            background: rgba(0,0,0,0.85);
             z-index: 500;
             justify-content: center;
             align-items: center;
         }
         .progress-box {
-            background: #1e293b;
-            border: 1px solid #38bdf8;
-            border-radius: 8px;
-            padding: 24px;
-            width: 450px;
+            background: #000000;
+            border: 2px solid #FFFFFF;
+            padding: 20px;
+            width: 440px;
             display: flex;
             flex-direction: column;
-            gap: 12px;
-            box-shadow: 0 10px 25px rgba(0,0,0,0.8);
+            gap: 10px;
         }
         .progress-track {
             width: 100%;
-            height: 12px;
-            background: #0f172a;
-            border-radius: 6px;
+            height: 14px;
+            background: #000000;
             overflow: hidden;
-            border: 1px solid #334155;
+            border: 1px solid #FFFFFF;
         }
         .progress-fill {
             height: 100%;
             width: 0%;
-            background: linear-gradient(90deg, #0284c7, #38bdf8);
-            transition: width 0.1s ease;
+            background: #FFFFFF;
+            transition: width 0.05s ease;
         }
 
         /* Screen Viewer Fullscreen Stage Overlay */
@@ -786,19 +788,19 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             display: none;
             position: absolute;
             top: 0; left: 0; width: 100%; height: 100%;
-            background: #121212;
+            background: #000000;
             z-index: 100;
             flex-direction: column;
         }
         .viewer-top-bar {
-            height: 42px;
-            background: #1f242d;
-            border-bottom: 1px solid #334155;
+            height: 40px;
+            background: #000000;
+            border-bottom: 2px solid #FFFFFF;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 0 16px;
-            color: #d1d5db;
+            padding: 0 14px;
+            color: #FFFFFF;
             font-size: 13px;
         }
         .viewer-stage {
@@ -806,8 +808,9 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             display: flex;
             justify-content: center;
             align-items: center;
-            padding: 12px;
+            padding: 10px;
             overflow: hidden;
+            background: #111111;
         }
         #screen-svg-canvas {
             width: 100%;
@@ -815,23 +818,22 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             max-width: 100%;
             max-height: 100%;
             object-fit: contain;
-            box-shadow: 0 0 30px rgba(0,0,0,0.9);
+            border: 1px solid #FFFFFF;
         }
         .has-tag-info { cursor: pointer; }
-        .show-tags .has-tag-info { outline: 2px dashed #00e5ff !important; }
-        .has-tag-info:hover { outline: 2px solid #ffea00 !important; }
+        .show-tags .has-tag-info { outline: 2px dashed #FFFFFF !important; }
+        .has-tag-info:hover { outline: 2px solid #FFFFFF !important; }
         #viewer-tag-tooltip {
             position: fixed;
-            bottom: 14px;
+            bottom: 12px;
             left: 50%;
             transform: translateX(-50%);
-            background: rgba(15, 23, 42, 0.95);
-            color: #38bdf8;
-            border: 1px solid #38bdf8;
-            padding: 8px 16px;
-            border-radius: 6px;
-            font-family: monospace;
-            font-size: 12px;
+            background: #000000;
+            color: #FFFFFF;
+            border: 1px solid #FFFFFF;
+            padding: 6px 12px;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 11px;
             display: none;
             z-index: 150;
             pointer-events: none;
@@ -842,94 +844,77 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             display: none;
             position: fixed;
             top: 0; left: 0; width: 100vw; height: 100vh;
-            background: rgba(0, 0, 0, 0.65);
+            background: rgba(0, 0, 0, 0.85);
             z-index: 300;
             justify-content: center;
             align-items: center;
         }
         .modal-box {
-            background: #1e293b;
-            border: 1px solid #38bdf8;
-            border-radius: 8px;
+            background: #000000;
+            border: 2px solid #FFFFFF;
             width: 90%;
-            max-width: 640px;
+            max-width: 620px;
             display: flex;
             flex-direction: column;
             overflow: hidden;
-            box-shadow: 0 12px 28px rgba(0, 0, 0, 0.85);
         }
         .modal-header {
-            background: #0f172a;
-            padding: 10px 16px;
+            background: #FFFFFF;
+            color: #000000;
+            padding: 8px 12px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            border-bottom: 1px solid #334155;
-            color: #e2e8f0;
-            font-size: 13px;
-            font-weight: bold;
+            font-size: 12px;
+            font-weight: 700;
         }
-        .modal-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; position: relative; }
+        .modal-body { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
         .modal-body textarea {
             width: 100%;
-            height: 150px;
-            background: #090d16;
-            color: #38bdf8;
-            border: 1px solid #334155;
-            border-radius: 6px;
-            padding: 10px;
-            font-family: 'Consolas', 'Courier New', monospace;
-            font-size: 13px;
-            line-height: 1.45;
+            height: 140px;
+            background: #000000;
+            color: #FFFFFF;
+            border: 1px solid #FFFFFF;
+            padding: 8px;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 12px;
             resize: vertical;
             outline: none;
-            user-select: text !important;
-            -webkit-user-select: text !important;
         }
-        .modal-body textarea:focus { border-color: #38bdf8; }
         .modal-footer { display: flex; justify-content: space-between; align-items: center; }
 
-        /* Custom Right-Click Context Menu */
+        /* Custom Context Menu for Right-Click */
         #custom-context-menu {
             display: none;
             position: fixed;
-            background: #1e293b;
-            border: 1px solid #38bdf8;
-            box-shadow: 0 6px 18px rgba(0,0,0,0.6);
-            border-radius: 6px;
-            padding: 4px 0;
+            background: #000000;
+            border: 2px solid #FFFFFF;
+            padding: 2px 0;
             z-index: 1000;
             min-width: 150px;
         }
         .context-menu-item {
-            padding: 8px 14px;
+            padding: 6px 12px;
             font-size: 12px;
-            color: #f1f5f9;
+            color: #FFFFFF;
             cursor: pointer;
             display: flex;
             align-items: center;
             justify-content: space-between;
         }
-        .context-menu-item:hover {
-            background-color: #0284c7;
-            color: #ffffff;
-        }
-        .context-menu-divider {
-            height: 1px;
-            background: #334155;
-            margin: 4px 0;
-        }
+        .context-menu-item:hover { background-color: #FFFFFF; color: #000000; }
+        .context-menu-divider { height: 1px; background: #555555; margin: 2px 0; }
     </style>
 </head>
 <body>
 
     <header>
         <div class="header-title">
-            <h1>FactoryTalk View SE HMI Analyzer</h1>
+            <h1>HMIFinder</h1>
             <div class="author-badge">Created by <b>Luis Castillo</b></div>
         </div>
         <div>
-            <button class="btn btn-success" onclick="loadFilesBatch()">+ Load & Parse XML Files</button>
+            <button class="btn" onclick="loadFilesBatch()">Load & Parse XML Files</button>
         </div>
     </header>
 
@@ -962,7 +947,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
                 <table id="results-table">
                     <thead id="table-head"></thead>
                     <tbody id="table-body">
-                        <tr><td colspan="4" class="empty-state">No XML files loaded. Click "+ Load & Parse XML Files" to begin.</td></tr>
+                        <tr><td colspan="4" class="empty-state">No XML files loaded. Click "Load & Parse XML Files" to begin.</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -976,7 +961,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
                     <span id="viewer-screen-title"><b>Screen:</b></span>
                 </div>
                 <div>
-                    <button id="toggle-tag-btn" class="btn" onclick="toggleTagOverlay()">Toggle Tag Highlight Box</button>
+                    <button id="toggle-tag-btn" class="btn btn-nav" onclick="toggleTagOverlay()">Toggle Tag Highlight Box</button>
                 </div>
             </div>
             <div class="viewer-stage">
@@ -988,11 +973,11 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
     <!-- Progress Modal -->
     <div id="progress-modal">
         <div class="progress-box">
-            <h3 style="font-size: 15px; color: #38bdf8;">Parsing & Indexing XML Files...</h3>
+            <h3 style="font-size: 13px; color: #FFFFFF; text-transform: uppercase;">Parsing & Indexing XML Files...</h3>
             <div class="progress-track">
                 <div class="progress-fill" id="progress-fill"></div>
             </div>
-            <div style="display: flex; justify-content: space-between; font-size: 12px; color: #94a3b8;">
+            <div style="display: flex; justify-content: space-between; font-size: 11px; color: #AAAAAA;">
                 <span id="progress-status-file">Processing...</span>
                 <span id="progress-status-count">0 / 0</span>
             </div>
@@ -1005,14 +990,14 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
         <div class="modal-box" onclick="event.stopPropagation()">
             <div class="modal-header">
                 <span>Element Tag & Expression Inspector</span>
-                <button class="btn btn-nav" onclick="closeInspectorModal()" style="padding: 2px 8px;">✕</button>
+                <button class="btn" onclick="closeInspectorModal()" style="padding: 1px 6px; font-size: 10px;">✕</button>
             </div>
             <div class="modal-body">
                 <textarea id="modal-tag-textarea" spellcheck="false"></textarea>
                 <div class="modal-footer">
-                    <span id="copy-status" style="color: #4ade80; font-size: 12px; display: none;">✓ Copied to clipboard!</span>
-                    <div style="margin-left: auto; display: flex; gap: 8px;">
-                        <button class="btn" style="background:#0284c7;" onclick="copyAllText()">Copy All</button>
+                    <span id="copy-status" style="color: #FFFFFF; font-size: 11px; display: none;">[ Copied to clipboard ]</span>
+                    <div style="margin-left: auto; display: flex; gap: 6px;">
+                        <button class="btn" onclick="copyAllText()">Copy All</button>
                         <button class="btn btn-nav" onclick="closeInspectorModal()">Close</button>
                     </div>
                 </div>
@@ -1094,8 +1079,8 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
                 tbody.innerHTML = results.map(r => `
                     <tr>
                         <td><b>${r.display_name}</b></td>
-                        <td style="font-family: monospace; color: #94a3b8;">${r.display_normalized}</td>
-                        <td><span class="screen-link" onclick="openScreen('${r.display_name}')">Launch Screen View →</span></td>
+                        <td style="font-family: 'Courier New', monospace; color: #AAAAAA;">${r.display_normalized}</td>
+                        <td><span class="screen-link" onclick="openScreen('${r.display_name}')">[ Launch Screen ]</span></td>
                     </tr>
                 `).join('');
 
@@ -1162,7 +1147,6 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             document.getElementById('toggle-tag-btn').textContent = overlayActive ? 'Hide Tag Outlines' : 'Toggle Tag Highlight Box';
         }
 
-        // SVG Hover & Click inspection
         const tooltip = document.getElementById('viewer-tag-tooltip');
         const inspectorModal = document.getElementById('inspector-modal');
         const modalTextarea = document.getElementById('modal-tag-textarea');
@@ -1204,14 +1188,11 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             }
         });
 
-        // Dedicated Right-Click Handling on Modal Textarea
         modalTextarea.addEventListener('contextmenu', (e) => {
             e.preventDefault();
             e.stopPropagation();
-            const mouseX = e.clientX;
-            const mouseY = e.clientY;
-            contextMenu.style.top = mouseY + 'px';
-            contextMenu.style.left = mouseX + 'px';
+            contextMenu.style.top = e.clientY + 'px';
+            contextMenu.style.left = e.clientX + 'px';
             contextMenu.style.display = 'block';
         });
 
@@ -1221,7 +1202,6 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
 
         function executeCopy(textToCopy) {
             if (!textToCopy) return;
-            // Strategy 1: execCommand (Works in WebViews without clipboard permission prompts)
             const temp = document.createElement("textarea");
             temp.value = textToCopy;
             document.body.appendChild(temp);
@@ -1230,7 +1210,6 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
                 document.execCommand("copy");
                 showCopiedFeedback();
             } catch (err) {
-                // Strategy 2: Modern Clipboard API
                 if (navigator.clipboard && navigator.clipboard.writeText) {
                     navigator.clipboard.writeText(textToCopy).then(showCopiedFeedback);
                 }
@@ -1271,7 +1250,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
         }
 
         function formatTags(tagString) {
-            if (!tagString) return '<span style="color:#64748b;">None</span>';
+            if (!tagString) return '<span style="color:#666666;">None</span>';
             return tagString.split(' | ').map(t => `<div class="tag-pill">${escapeHtml(t)}</div>`).join('');
         }
 
@@ -1296,13 +1275,13 @@ def main():
   bridge = DesktopAppBridge(db)
 
   window = webview.create_window(
-      title="FactoryTalk View SE HMI Analyzer - Created by Luis Castillo",
+      title="HMIFinder - Created by Luis Castillo",
       html=MAIN_PORTAL_HTML,
       js_api=bridge,
       width=1360,
       height=860,
       resizable=True,
-      text_select=True,  # Explicitly allow desktop text selection
+      text_select=True,
   )
   bridge.window = window
   webview.start()
