@@ -5,6 +5,7 @@ import os
 import re
 import sqlite3
 import sys
+import threading
 import xml.etree.ElementTree as ET
 import webview
 
@@ -365,29 +366,31 @@ class FlattenedFTViewCompiler:
 class FTViewDatabaseHub:
 
   def __init__(self):
+    self.lock = threading.Lock()
     self.conn = sqlite3.connect(":memory:", check_same_thread=False)
     self.files_cache = {}
     self._init_db()
 
   def _init_db(self):
-    cur = self.conn.cursor()
-    cur.execute("""
-            CREATE TABLE IF NOT EXISTS hmi_elements (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                display_name TEXT,
-                display_normalized TEXT,
-                label_text TEXT,
-                tags TEXT
-            )
-        """)
-    cur.execute(
-        "CREATE INDEX IF NOT EXISTS idx_norm ON"
-        " hmi_elements(display_normalized)"
-    )
-    cur.execute(
-        "CREATE INDEX IF NOT EXISTS idx_disp ON hmi_elements(display_name)"
-    )
-    self.conn.commit()
+    with self.lock:
+      cur = self.conn.cursor()
+      cur.execute("""
+                CREATE TABLE IF NOT EXISTS hmi_elements (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    display_name TEXT,
+                    display_normalized TEXT,
+                    label_text TEXT,
+                    tags TEXT
+                )
+            """)
+      cur.execute(
+          "CREATE INDEX IF NOT EXISTS idx_norm ON"
+          " hmi_elements(display_normalized)"
+      )
+      cur.execute(
+          "CREATE INDEX IF NOT EXISTS idx_disp ON hmi_elements(display_name)"
+      )
+      self.conn.commit()
 
   def normalize_display_name(self, name: str) -> str:
     base = os.path.splitext(name)[0]
@@ -408,16 +411,12 @@ class FTViewDatabaseHub:
     with open(file_path, "rb") as f:
       xml_bytes = f.read()
 
-    self.files_cache[display_name] = xml_bytes
-    norm_name = self.normalize_display_name(display_name)
+    with self.lock:
+      self.files_cache[display_name] = xml_bytes
 
+    norm_name = self.normalize_display_name(display_name)
     tree = ET.parse(io.BytesIO(xml_bytes))
     root = tree.getroot()
-
-    cur = self.conn.cursor()
-    cur.execute(
-        "DELETE FROM hmi_elements WHERE display_name = ?", (display_name,)
-    )
 
     rows_to_insert = []
     for elem in root.iter():
@@ -488,44 +487,49 @@ class FTViewDatabaseHub:
             (display_name, norm_name, label_text_col, tags_col)
         )
 
-    if rows_to_insert:
-      cur.executemany(
-          """
-                INSERT INTO hmi_elements (display_name, display_normalized, label_text, tags)
-                VALUES (?, ?, ?, ?)
-            """,
-          rows_to_insert,
+    with self.lock:
+      cur = self.conn.cursor()
+      cur.execute(
+          "DELETE FROM hmi_elements WHERE display_name = ?", (display_name,)
       )
-
-    self.conn.commit()
+      if rows_to_insert:
+        cur.executemany(
+            """
+                    INSERT INTO hmi_elements (display_name, display_normalized, label_text, tags)
+                    VALUES (?, ?, ?, ?)
+                """,
+            rows_to_insert,
+        )
+      self.conn.commit()
 
   def get_summary(self):
-    cur = self.conn.cursor()
-    cur.execute(
-        "SELECT COUNT(DISTINCT display_name), COUNT(*) FROM hmi_elements"
-    )
-    displays_count, elements_count = cur.fetchone()
-    return {"displays": displays_count or 0, "elements": elements_count or 0}
+    with self.lock:
+      cur = self.conn.cursor()
+      cur.execute(
+          "SELECT COUNT(DISTINCT display_name), COUNT(*) FROM hmi_elements"
+      )
+      displays_count, elements_count = cur.fetchone()
+      return {"displays": displays_count or 0, "elements": elements_count or 0}
 
   def search_by_display(self, query: str):
     norm_q = self.normalize_display_name(query)
-    cur = self.conn.cursor()
-    if not norm_q:
-      cur.execute(
-          "SELECT DISTINCT display_name, display_normalized FROM hmi_elements"
-          " ORDER BY display_name"
-      )
-    else:
-      cur.execute(
-          """
-                SELECT DISTINCT display_name, display_normalized FROM hmi_elements 
-                WHERE display_normalized LIKE ? OR display_name LIKE ?
-                ORDER BY display_name
-            """,
-          (f"%{norm_q}%", f"%{query}%"),
-      )
-
-    rows = cur.fetchall()
+    with self.lock:
+      cur = self.conn.cursor()
+      if not norm_q:
+        cur.execute(
+            "SELECT DISTINCT display_name, display_normalized FROM hmi_elements"
+            " ORDER BY display_name LIMIT 60"
+        )
+      else:
+        cur.execute(
+            """
+                    SELECT DISTINCT display_name, display_normalized FROM hmi_elements 
+                    WHERE display_normalized LIKE ? OR display_name LIKE ?
+                    ORDER BY display_name LIMIT 60
+                """,
+            (f"%{norm_q}%", f"%{query}%"),
+        )
+      rows = cur.fetchall()
     return [
         {"display_name": r[0], "display_normalized": r[1]} for r in rows
     ]
@@ -533,33 +537,35 @@ class FTViewDatabaseHub:
   def search_by_label(self, query: str):
     if not query.strip():
       return []
-    cur = self.conn.cursor()
-    cur.execute(
-        """
-            SELECT display_name, label_text, tags 
-            FROM hmi_elements 
-            WHERE label_text LIKE ? 
-            ORDER BY display_name
-        """,
-        (f"%{query}%",),
-    )
-    rows = cur.fetchall()
+    with self.lock:
+      cur = self.conn.cursor()
+      cur.execute(
+          """
+                SELECT display_name, label_text, tags 
+                FROM hmi_elements 
+                WHERE label_text LIKE ? 
+                ORDER BY display_name LIMIT 60
+            """,
+          (f"%{query}%",),
+      )
+      rows = cur.fetchall()
     return [{"display_name": r[0], "label_text": r[1], "tags": r[2]} for r in rows]
 
   def search_by_tag(self, query: str):
     if not query.strip():
       return []
-    cur = self.conn.cursor()
-    cur.execute(
-        """
-            SELECT display_name, label_text, tags 
-            FROM hmi_elements 
-            WHERE tags LIKE ? 
-            ORDER BY display_name
-        """,
-        (f"%{query}%",),
-    )
-    rows = cur.fetchall()
+    with self.lock:
+      cur = self.conn.cursor()
+      cur.execute(
+          """
+                SELECT display_name, label_text, tags 
+                FROM hmi_elements 
+                WHERE tags LIKE ? 
+                ORDER BY display_name LIMIT 60
+            """,
+          (f"%{query}%",),
+      )
+      rows = cur.fetchall()
     return [{"display_name": r[0], "label_text": r[1], "tags": r[2]} for r in rows]
 
 
@@ -569,24 +575,40 @@ class DesktopAppBridge:
     self.db = db
     self.window = None
 
-  def open_file_picker(self):
+  def start_batch_import(self):
     if not self.window:
-      return []
-    file_types = (
-        "FactoryTalk XML Files (*.xml)",
-        "All files (*.*)",
-    )
+      return
+
+    file_types = ("FactoryTalk XML Files (*.xml)", "All files (*.*)")
     result = self.window.create_file_dialog(
         webview.OPEN_DIALOG, allow_multiple=True, file_types=file_types
     )
-    return list(result) if result else []
+    if not result:
+      return
 
-  def parse_single_file(self, file_path: str):
-    self.db.parse_and_index_xml(file_path)
-    return self.db.get_summary()
+    file_paths = list(result)
 
-  def get_current_stats(self):
-    return self.db.get_summary()
+    # Ingestion worker thread keeps the UI fluid and unblocked
+    def worker():
+      total = len(file_paths)
+      for idx, fp in enumerate(file_paths):
+        fname = os.path.basename(fp)
+        escaped_name = html.escape(fname).replace("'", "\\'")
+        progress = int(((idx + 1) / total) * 100)
+
+        # Notify UI via safe evaluation
+        self.window.evaluate_js(
+            f"onBatchProgress('{escaped_name}', {idx + 1}, {total},"
+            f" {progress});"
+        )
+        self.db.parse_and_index_xml(fp)
+
+      summary = self.db.get_summary()
+      self.window.evaluate_js(
+          f"onBatchComplete({summary['displays']}, {summary['elements']});"
+      )
+
+    threading.Thread(target=worker, daemon=True).start()
 
   def search_displays(self, query):
     return self.db.search_by_display(query)
@@ -598,7 +620,8 @@ class DesktopAppBridge:
     return self.db.search_by_tag(query)
 
   def get_screen_render_data(self, display_name):
-    xml_bytes = self.db.files_cache.get(display_name)
+    with self.db.lock:
+      xml_bytes = self.db.files_cache.get(display_name)
     if not xml_bytes:
       return None
     compiler = FlattenedFTViewCompiler(xml_bytes, display_name)
@@ -617,7 +640,6 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             padding: 0; 
             border-radius: 0px !important; 
             -webkit-font-smoothing: antialiased;
-            -moz-osx-font-smoothing: grayscale;
             text-rendering: geometricPrecision;
         }
         body {
@@ -847,7 +869,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             pointer-events: none;
         }
 
-        /* Dedicated Loading Animation Overlay for Screen Rendering */
+        /* Scanner Display Loader */
         #screen-loader {
             display: none;
             position: absolute;
@@ -931,7 +953,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
         }
         .modal-footer { display: flex; justify-content: space-between; align-items: center; }
 
-        /* Custom Context Menu for Right-Click */
+        /* Custom Context Menu */
         #custom-context-menu {
             display: none;
             position: fixed;
@@ -962,7 +984,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             <div class="author-badge">Created by <b>Luis Castillo</b></div>
         </div>
         <div>
-            <button class="btn" onclick="loadFilesBatch()">Load & Parse XML Files</button>
+            <button class="btn" onclick="startLoadingBatch()">Load & Parse XML Files</button>
         </div>
     </header>
 
@@ -987,8 +1009,8 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
 
             <div class="search-box-wrapper">
                 <input type="text" id="main-search-input" class="search-input" 
-                       placeholder="Search displays (ignores dashes, underscores, and spacing)..." 
-                       oninput="onSearchInput(this.value)">
+                       placeholder="Search displays (ignores dashes, underscores, and spaces)..." 
+                       oninput="onSearchInputDebounced(this.value)">
             </div>
 
             <div class="results-container">
@@ -1001,7 +1023,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- Dedicated SVG Viewer Overlay Stage -->
+        <!-- SVG Viewer Overlay Stage -->
         <div id="screen-viewer-view">
             <div class="viewer-top-bar">
                 <div style="display: flex; align-items: center; gap: 12px;">
@@ -1059,7 +1081,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- Custom Context Menu for Right-Click -->
+    <!-- Custom Context Menu -->
     <div id="custom-context-menu">
         <div class="context-menu-item" onclick="contextCopySelection()">Copy Selection <span>Ctrl+C</span></div>
         <div class="context-menu-item" onclick="contextCopyAll()">Copy All <span>Ctrl+A, C</span></div>
@@ -1071,6 +1093,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
         let currentTab = 'displays';
         let overlayActive = false;
         let isInspectorOpen = false;
+        let searchDebounceTimer = null;
 
         function switchTab(tab) {
             currentTab = tab;
@@ -1088,35 +1111,31 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             onSearchInput(searchInput.value);
         }
 
-        async function loadFilesBatch() {
-            const fileList = await window.pywebview.api.open_file_picker();
-            if (!fileList || fileList.length === 0) return;
+        function onSearchInputDebounced(val) {
+            clearTimeout(searchDebounceTimer);
+            searchDebounceTimer = setTimeout(() => {
+                onSearchInput(val);
+            }, 250);
+        }
 
-            const modal = document.getElementById('progress-modal');
-            const fill = document.getElementById('progress-fill');
-            const fileStatus = document.getElementById('progress-status-file');
-            const countStatus = document.getElementById('progress-status-count');
+        function startLoadingBatch() {
+            document.getElementById('progress-modal').style.display = 'flex';
+            document.getElementById('progress-fill').style.width = '0%';
+            document.getElementById('progress-status-file').textContent = 'Opening dialog...';
+            window.pywebview.api.start_batch_import();
+        }
 
-            modal.style.display = 'flex';
-            const total = fileList.length;
-            let summary = null;
+        function onBatchProgress(fileName, current, total, percent) {
+            document.getElementById('progress-status-file').textContent = fileName;
+            document.getElementById('progress-status-count').textContent = current + ' / ' + total;
+            document.getElementById('progress-fill').style.width = percent + '%';
+        }
 
-            for (let i = 0; i < total; i++) {
-                const path = fileList[i];
-                const fileName = path.replace(/^.*[\\\\/]/, '');
-                fileStatus.textContent = fileName;
-                countStatus.textContent = `${i + 1} / ${total}`;
-                fill.style.width = `${Math.round(((i + 1) / total) * 100)}%`;
-
-                summary = await window.pywebview.api.parse_single_file(path);
-            }
-
-            modal.style.display = 'none';
-            if (summary) {
-                document.getElementById('stat-displays').textContent = summary.displays;
-                document.getElementById('stat-elements').textContent = summary.elements;
-                onSearchInput(document.getElementById('main-search-input').value);
-            }
+        function onBatchComplete(displaysCount, elementsCount) {
+            document.getElementById('progress-modal').style.display = 'none';
+            document.getElementById('stat-displays').textContent = displaysCount;
+            document.getElementById('stat-elements').textContent = elementsCount;
+            onSearchInput(document.getElementById('main-search-input').value);
         }
 
         async function onSearchInput(query) {
@@ -1125,8 +1144,8 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
 
             if (currentTab === 'displays') {
                 thead.innerHTML = `<tr><th>Display Name</th><th>Normalized Identifier</th><th>Action</th></tr>`;
-                const results = await window.pywebview.api.search_displays(query);
-                if (results.length === 0) {
+                const results = await window.pywebview.api.search_displays(query || "");
+                if (!results || results.length === 0) {
                     tbody.innerHTML = `<tr><td colspan="3" class="empty-state">No matching displays found.</td></tr>`;
                     return;
                 }
@@ -1140,12 +1159,12 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
 
             } else if (currentTab === 'labels') {
                 thead.innerHTML = `<tr><th>Display</th><th>Label / Caption Found</th><th>Associated Tag(s)</th></tr>`;
-                if (!query.trim()) {
+                if (!query || !query.trim()) {
                     tbody.innerHTML = `<tr><td colspan="3" class="empty-state">Type text above to search screen labels.</td></tr>`;
                     return;
                 }
                 const results = await window.pywebview.api.search_labels(query);
-                if (results.length === 0) {
+                if (!results || results.length === 0) {
                     tbody.innerHTML = `<tr><td colspan="3" class="empty-state">No screens found containing "${query}".</td></tr>`;
                     return;
                 }
@@ -1159,12 +1178,12 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
 
             } else if (currentTab === 'tags') {
                 thead.innerHTML = `<tr><th>Display</th><th>PLC Tag / Expression</th><th>Associated Text</th></tr>`;
-                if (!query.trim()) {
+                if (!query || !query.trim()) {
                     tbody.innerHTML = `<tr><td colspan="3" class="empty-state">Type a tag pattern above to cross-reference displays.</td></tr>`;
                     return;
                 }
                 const results = await window.pywebview.api.search_tags(query);
-                if (results.length === 0) {
+                if (!results || results.length === 0) {
                     tbody.innerHTML = `<tr><td colspan="3" class="empty-state">No screens found referencing "${query}".</td></tr>`;
                     return;
                 }
@@ -1189,7 +1208,6 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             loader.style.display = 'flex';
             screenView.style.display = 'flex';
 
-            // Allow UI to paint the scanner animation before background rendering
             setTimeout(async () => {
                 const data = await window.pywebview.api.get_screen_render_data(displayName);
                 if (data) {
@@ -1199,7 +1217,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
                     document.getElementById('viewer-screen-title').innerHTML = `<b>Screen:</b> ${data.file_name} (${data.width}×${data.height})`;
                 }
                 loader.style.display = 'none';
-            }, 60);
+            }, 50);
         }
 
         function closeScreenViewer() {
