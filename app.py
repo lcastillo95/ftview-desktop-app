@@ -49,6 +49,11 @@ class FlattenedFTViewCompiler:
     if name:
       info.append(f"Name: {name}")
 
+    for k, v in elem.attrib.items():
+      if isinstance(v, str):
+        for tag_match in re.findall(r"\{(\/[A-Za-z0-9_]+/[^\}]+)\}", v):
+          info.append(f"Tag: {tag_match}")
+
     for conn in elem.findall("./connections/connection"):
       expr = conn.attrib.get("expression")
       conn_name = conn.attrib.get("name", "Value")
@@ -341,143 +346,24 @@ class FlattenedFTViewCompiler:
         rendered_elements.append(svg_markup)
     return rendered_elements
 
-  def compile(self) -> str:
+  def compile_svg_bundle(self) -> dict:
     all_primitives = []
     for child in self.root:
       all_primitives.extend(self._flatten_and_render(child, []))
-    svg_content = "\n  ".join(all_primitives)
-
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <style>
-        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-        html, body {{ width: 100%; height: 100%; background: #121212; display: flex; flex-direction: column; overflow: hidden; font-family: Arial, sans-serif; }}
-        #top-bar {{ height: 42px; background: #1f242d; border-bottom: 1px solid #334155; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; color: #d1d5db; font-size: 13px; flex-shrink: 0; }}
-        .btn {{ padding: 5px 12px; border: none; border-radius: 4px; font-size: 12px; font-weight: bold; cursor: pointer; }}
-        .btn-nav {{ background: #334155; color: #f1f5f9; }}
-        .btn-nav:hover {{ background: #475569; }}
-        .btn-primary {{ background: #2563eb; color: white; }}
-        .btn-primary:hover {{ background: #1d4ed8; }}
-        .stage {{ flex: 1; width: 100%; height: calc(100vh - 42px); display: flex; justify-content: center; align-items: center; padding: 12px; overflow: hidden; }}
-        svg {{ width: 100%; height: 100%; max-width: 100%; max-height: 100%; object-fit: contain; background-color: {self.bg_color}; box-shadow: 0 0 30px rgba(0, 0, 0, 0.9); }}
-        text {{ user-select: none; dominant-baseline: central; }}
-        .has-tag-info {{ cursor: pointer; }}
-        .show-tags .has-tag-info {{ outline: 2px dashed #00e5ff !important; }}
-        .has-tag-info:hover {{ outline: 2px solid #ffea00 !important; }}
-        #tag-tooltip {{ position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); background: rgba(15, 23, 42, 0.95); color: #38bdf8; border: 1px solid #38bdf8; padding: 8px 16px; border-radius: 6px; font-family: monospace; font-size: 12px; display: none; z-index: 100; pointer-events: none; }}
-        #inspector-modal {{ display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0, 0, 0, 0.65); z-index: 200; justify-content: center; align-items: center; }}
-        .modal-box {{ background: #1e293b; border: 1px solid #38bdf8; border-radius: 8px; width: 90%; max-width: 620px; display: flex; flex-direction: column; overflow: hidden; }}
-        .modal-header {{ background: #0f172a; padding: 10px 16px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #334155; color: #e2e8f0; font-size: 13px; font-weight: bold; }}
-        .modal-body {{ padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }}
-        .modal-body textarea {{ width: 100%; height: 140px; background: #090d16; color: #38bdf8; border: 1px solid #334155; border-radius: 6px; padding: 10px; font-family: monospace; font-size: 13px; resize: vertical; outline: none; }}
-        .modal-footer {{ display: flex; justify-content: space-between; align-items: center; }}
-        .btn-copy {{ background: #0284c7; color: white; }}
-        .btn-close {{ background: #475569; color: white; }}
-        #copy-status {{ color: #4ade80; font-size: 12px; display: none; }}
-    </style>
-</head>
-<body>
-    <div id="top-bar">
-        <div style="display: flex; align-items: center; gap: 12px;">
-            <button class="btn btn-nav" onclick="window.pywebview.api.return_to_main()">← Back to Search Hub</button>
-            <span><b>Screen:</b> {self.file_name} ({self.width}×{self.height})</span>
-        </div>
-        <div>
-            <button id="toggle-btn" class="btn btn-primary" onclick="toggleTagOverlay()">Toggle Tag Highlight Box</button>
-        </div>
-    </div>
-    <div class="stage"><svg viewBox="0 0 {self.width} {self.height}" preserveAspectRatio="xMidYMid meet">{svg_content}</svg></div>
-    <div id="tag-tooltip"></div>
-    <div id="inspector-modal" onclick="closeInspectorModal()">
-        <div class="modal-box" onclick="event.stopPropagation()">
-            <div class="modal-header">
-                <span>Element Tag & Expression Inspector</span>
-                <button class="btn btn-close" onclick="closeInspectorModal()" style="padding: 2px 8px;">✕</button>
-            </div>
-            <div class="modal-body">
-                <textarea id="modal-tag-textarea" spellcheck="false"></textarea>
-                <div class="modal-footer">
-                    <span id="copy-status">✓ Copied to clipboard!</span>
-                    <div style="margin-left: auto; display: flex; gap: 8px;">
-                        <button class="btn btn-copy" onclick="copyModalText()">Copy All</button>
-                        <button class="btn btn-close" onclick="closeInspectorModal()">Close</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    <script>
-        const tooltip = document.getElementById('tag-tooltip');
-        const modal = document.getElementById('inspector-modal');
-        const modalTextarea = document.getElementById('modal-tag-textarea');
-        const copyStatus = document.getElementById('copy-status');
-        let overlayActive = false;
-        let isModalOpen = false;
-
-        function toggleTagOverlay() {{
-            overlayActive = !overlayActive;
-            document.body.classList.toggle('show-tags', overlayActive);
-            document.getElementById('toggle-btn').textContent = overlayActive ? 'Hide Tag Outlines' : 'Toggle Tag Highlight Box';
-        }}
-
-        document.addEventListener('mouseover', (e) => {{
-            if (isModalOpen) return;
-            const target = e.target.closest('[data-tag-info]');
-            if (target) {{
-                tooltip.style.display = 'block';
-                tooltip.textContent = target.getAttribute('data-tag-info');
-            }}
-        }});
-
-        document.addEventListener('mouseout', (e) => {{
-            if (isModalOpen) return;
-            const target = e.target.closest('[data-tag-info]');
-            if (target) tooltip.style.display = 'none';
-        }});
-
-        document.addEventListener('click', (e) => {{
-            const target = e.target.closest('[data-tag-info]');
-            if (target) {{
-                e.stopPropagation();
-                const rawInfo = target.getAttribute('data-tag-info');
-                if (rawInfo) {{
-                    modalTextarea.value = rawInfo.split(' | ').join('\\n');
-                    modal.style.display = 'flex';
-                    isModalOpen = true;
-                    tooltip.style.display = 'none';
-                    copyStatus.style.display = 'none';
-                    setTimeout(() => {{ modalTextarea.focus(); modalTextarea.select(); }}, 50);
-                }}
-            }}
-        }});
-
-        function closeInspectorModal() {{
-            modal.style.display = 'none';
-            isModalOpen = false;
-        }}
-
-        function copyModalText() {{
-            modalTextarea.select();
-            navigator.clipboard.writeText(modalTextarea.value);
-            copyStatus.style.display = 'inline';
-            setTimeout(() => {{ copyStatus.style.display = 'none'; }}, 2000);
-        }}
-
-        document.addEventListener('keydown', (e) => {{
-            if (e.key === 'Escape' && isModalOpen) closeInspectorModal();
-        }});
-    </script>
-</body>
-</html>"""
+    return {
+        "svg": "\n  ".join(all_primitives),
+        "width": self.width,
+        "height": self.height,
+        "bg_color": self.bg_color,
+        "file_name": self.file_name,
+    }
 
 
 class FTViewDatabaseHub:
 
   def __init__(self):
     self.conn = sqlite3.connect(":memory:", check_same_thread=False)
-    self.files_cache = {}  # display_name -> bytes
+    self.files_cache = {}
     self._init_db()
 
   def _init_db(self):
@@ -494,9 +380,21 @@ class FTViewDatabaseHub:
     self.conn.commit()
 
   def normalize_display_name(self, name: str) -> str:
-    """Strips extension, removes - _ and non-alphanumeric characters, and converts to lowercase."""
     base = os.path.splitext(name)[0]
     return re.sub(r"[^a-zA-Z0-9]", "", base).lower()
+
+  def extract_ft_tags_from_text(self, text_val: str) -> list:
+    """Finds tags matching {/CH01/...} pattern or standard expressions."""
+    if not text_val:
+      return []
+    # Match tags starting with {/AreaName/
+    bracketed = re.findall(r"\{(\/[A-Za-z0-9_]+/[^\}]+)\}", text_val)
+    if bracketed:
+      return bracketed
+    # Fallback to direct path check
+    if text_val.startswith("/") and "::" in text_val:
+      return [text_val.strip("{}")]
+    return []
 
   def parse_and_index_xml(self, file_path: str):
     display_name = os.path.basename(file_path)
@@ -510,13 +408,11 @@ class FTViewDatabaseHub:
     root = tree.getroot()
 
     cur = self.conn.cursor()
-    # Delete old entries if re-indexing
     cur.execute(
         "DELETE FROM hmi_elements WHERE display_name = ?", (display_name,)
     )
 
     for elem in root.iter():
-      # 1. Extract all label texts
       texts = []
       cap = elem.attrib.get("caption")
       if cap:
@@ -533,30 +429,51 @@ class FTViewDatabaseHub:
         if sc and sc not in texts:
           texts.append(sc)
 
-      # 2. Extract full tags & expressions
+      # Tag discovery via attributes and nodes
       tags = []
+      for attr_name, attr_val in elem.attrib.items():
+        if isinstance(attr_val, str):
+          for t in self.extract_ft_tags_from_text(attr_val):
+            if t not in tags:
+              tags.append(t)
+
       for conn in elem.findall("./connections/connection"):
         expr = conn.attrib.get("expression")
         if expr:
-          tags.append(expr)
+          extracted = self.extract_ft_tags_from_text(expr)
+          if extracted:
+            tags.extend([x for x in extracted if x not in tags])
+          elif expr not in tags:
+            tags.append(expr)
 
       for anim in elem.findall("./animations/*"):
         expr = anim.attrib.get("expression")
-        if expr and expr not in tags:
-          tags.append(expr)
+        if expr:
+          extracted = self.extract_ft_tags_from_text(expr)
+          if extracted:
+            tags.extend([x for x in extracted if x not in tags])
+          elif expr not in tags:
+            tags.append(expr)
 
       for act in elem.findall("./action"):
         t = act.attrib.get("tag")
-        if t and t not in tags:
-          tags.append(t)
+        if t:
+          extracted = self.extract_ft_tags_from_text(t)
+          if extracted:
+            tags.extend([x for x in extracted if x not in tags])
+          elif t not in tags:
+            tags.append(t)
 
       for cmd in elem.findall("./command"):
         for attr in ("pressAction", "releaseAction"):
           c = cmd.attrib.get(attr)
-          if c and c not in tags:
-            tags.append(c)
+          if c:
+            extracted = self.extract_ft_tags_from_text(c)
+            if extracted:
+              tags.extend([x for x in extracted if x not in tags])
+            elif c not in tags:
+              tags.append(c)
 
-      # Write to SQLite if there is either text or tag info
       if texts or tags:
         label_text_col = "\n".join(texts)
         tags_col = " | ".join(tags)
@@ -640,7 +557,7 @@ class DesktopAppBridge:
     self.db = db
     self.window = None
 
-  def load_files_dialog(self):
+  def open_file_picker(self):
     root = tk.Tk()
     root.withdraw()
     root.attributes("-topmost", True)
@@ -649,12 +566,14 @@ class DesktopAppBridge:
         filetypes=[("XML files", "*.xml"), ("All files", "*.*")],
     )
     root.destroy()
+    return list(file_paths) if file_paths else []
 
-    if file_paths:
-      for fp in file_paths:
-        self.db.parse_and_index_xml(fp)
-      return self.db.get_summary()
-    return None
+  def parse_single_file(self, file_path: str):
+    self.db.parse_and_index_xml(file_path)
+    return self.db.get_summary()
+
+  def get_current_stats(self):
+    return self.db.get_summary()
 
   def search_displays(self, query):
     return self.db.search_by_display(query)
@@ -665,18 +584,12 @@ class DesktopAppBridge:
   def search_tags(self, query):
     return self.db.search_by_tag(query)
 
-  def open_screen(self, display_name):
+  def get_screen_render_data(self, display_name):
     xml_bytes = self.db.files_cache.get(display_name)
     if not xml_bytes:
-      return False
-
+      return None
     compiler = FlattenedFTViewCompiler(xml_bytes, display_name)
-    screen_html = compiler.compile()
-    self.window.load_html(screen_html)
-    return True
-
-  def return_to_main(self):
-    self.window.load_html(MAIN_PORTAL_HTML)
+    return compiler.compile_svg_bundle()
 
 
 MAIN_PORTAL_HTML = """<!DOCTYPE html>
@@ -703,25 +616,12 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             align-items: center;
             justify-content: space-between;
             box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            z-index: 10;
         }
-        .header-title {
-            display: flex;
-            flex-direction: column;
-        }
-        .header-title h1 {
-            font-size: 18px;
-            font-weight: 700;
-            color: #38bdf8;
-            letter-spacing: -0.5px;
-        }
-        .header-title .author-badge {
-            font-size: 12px;
-            color: #94a3b8;
-            margin-top: 2px;
-        }
-        .header-title .author-badge b {
-            color: #f59e0b;
-        }
+        .header-title { display: flex; flex-direction: column; }
+        .header-title h1 { font-size: 18px; font-weight: 700; color: #38bdf8; letter-spacing: -0.5px; }
+        .header-title .author-badge { font-size: 12px; color: #94a3b8; margin-top: 2px; }
+        .header-title .author-badge b { color: #f59e0b; }
         .btn {
             background-color: #0284c7;
             color: white;
@@ -736,14 +636,11 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
         .btn:hover { background-color: #0369a1; }
         .btn-success { background-color: #10b981; }
         .btn-success:hover { background-color: #059669; }
+        .btn-nav { background: #334155; color: #f1f5f9; }
+        .btn-nav:hover { background: #475569; }
 
-        .container {
-            display: flex;
-            flex: 1;
-            overflow: hidden;
-        }
+        .container { display: flex; flex: 1; overflow: hidden; position: relative; }
         
-        /* Sidebar Navigation */
         .sidebar {
             width: 220px;
             background: #182234;
@@ -764,17 +661,9 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             cursor: pointer;
             transition: all 0.15s ease;
         }
-        .nav-item:hover {
-            background-color: #243248;
-            color: #ffffff;
-        }
-        .nav-item.active {
-            background-color: #0284c7;
-            color: #ffffff;
-            font-weight: 600;
-        }
+        .nav-item:hover { background-color: #243248; color: #ffffff; }
+        .nav-item.active { background-color: #0284c7; color: #ffffff; font-weight: 600; }
 
-        /* Content Stage */
         .main-content {
             flex: 1;
             display: flex;
@@ -782,11 +671,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             padding: 24px;
             overflow-y: auto;
         }
-        .stats-bar {
-            display: flex;
-            gap: 16px;
-            margin-bottom: 20px;
-        }
+        .stats-bar { display: flex; gap: 16px; margin-bottom: 20px; }
         .stat-card {
             background: #1e293b;
             border: 1px solid #334155;
@@ -800,10 +685,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
         .stat-label { font-size: 11px; text-transform: uppercase; color: #94a3b8; font-weight: 600; }
         .stat-value { font-size: 20px; font-weight: 700; color: #38bdf8; }
 
-        .search-box-wrapper {
-            position: relative;
-            margin-bottom: 16px;
-        }
+        .search-box-wrapper { margin-bottom: 16px; }
         .search-input {
             width: 100%;
             padding: 12px 16px;
@@ -815,12 +697,8 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             outline: none;
             transition: border-color 0.2s;
         }
-        .search-input:focus {
-            border-color: #38bdf8;
-            box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
-        }
+        .search-input:focus { border-color: #38bdf8; box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2); }
 
-        /* Tables & Results */
         .results-container {
             flex: 1;
             background: #1e293b;
@@ -828,12 +706,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             border-radius: 8px;
             overflow: auto;
         }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 13px;
-            text-align: left;
-        }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; text-align: left; }
         th {
             background-color: #0f172a;
             color: #94a3b8;
@@ -844,24 +717,10 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             top: 0;
             z-index: 2;
         }
-        td {
-            padding: 12px 16px;
-            border-bottom: 1px solid #293548;
-            color: #e2e8f0;
-            vertical-align: top;
-        }
-        tr:hover td {
-            background-color: #243248;
-        }
-        .screen-link {
-            color: #38bdf8;
-            font-weight: 600;
-            cursor: pointer;
-            text-decoration: underline;
-        }
-        .screen-link:hover {
-            color: #7dd3fc;
-        }
+        td { padding: 12px 16px; border-bottom: 1px solid #293548; color: #e2e8f0; vertical-align: top; }
+        tr:hover td { background-color: #243248; }
+        .screen-link { color: #38bdf8; font-weight: 600; cursor: pointer; text-decoration: underline; }
+        .screen-link:hover { color: #7dd3fc; }
         .tag-pill {
             display: inline-block;
             background: #090d16;
@@ -874,16 +733,145 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             margin: 2px 0;
             word-break: break-all;
         }
-        .text-preview {
-            white-space: pre-line;
-            color: #cbd5e1;
+        .text-preview { white-space: pre-line; color: #cbd5e1; }
+        .empty-state { padding: 40px; text-align: center; color: #64748b; font-size: 14px; }
+
+        /* Progress Bar Modal */
+        #progress-modal {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0,0,0,0.75);
+            z-index: 500;
+            justify-content: center;
+            align-items: center;
         }
-        .empty-state {
-            padding: 40px;
-            text-align: center;
-            color: #64748b;
-            font-size: 14px;
+        .progress-box {
+            background: #1e293b;
+            border: 1px solid #38bdf8;
+            border-radius: 8px;
+            padding: 24px;
+            width: 450px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.8);
         }
+        .progress-track {
+            width: 100%;
+            height: 12px;
+            background: #0f172a;
+            border-radius: 6px;
+            overflow: hidden;
+            border: 1px solid #334155;
+        }
+        .progress-fill {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #0284c7, #38bdf8);
+            transition: width 0.1s ease;
+        }
+
+        /* Screen Viewer Fullscreen Stage Overlay */
+        #screen-viewer-view {
+            display: none;
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: #121212;
+            z-index: 100;
+            flex-direction: column;
+        }
+        .viewer-top-bar {
+            height: 42px;
+            background: #1f242d;
+            border-bottom: 1px solid #334155;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 16px;
+            color: #d1d5db;
+            font-size: 13px;
+        }
+        .viewer-stage {
+            flex: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 12px;
+            overflow: hidden;
+        }
+        #screen-svg-canvas {
+            width: 100%;
+            height: 100%;
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            box-shadow: 0 0 30px rgba(0,0,0,0.9);
+        }
+        .has-tag-info { cursor: pointer; }
+        .show-tags .has-tag-info { outline: 2px dashed #00e5ff !important; }
+        .has-tag-info:hover { outline: 2px solid #ffea00 !important; }
+        #viewer-tag-tooltip {
+            position: fixed;
+            bottom: 14px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(15, 23, 42, 0.95);
+            color: #38bdf8;
+            border: 1px solid #38bdf8;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 12px;
+            display: none;
+            z-index: 150;
+            pointer-events: none;
+        }
+        #inspector-modal {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.65);
+            z-index: 300;
+            justify-content: center;
+            align-items: center;
+        }
+        .modal-box {
+            background: #1e293b;
+            border: 1px solid #38bdf8;
+            border-radius: 8px;
+            width: 90%;
+            max-width: 620px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .modal-header {
+            background: #0f172a;
+            padding: 10px 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #334155;
+            color: #e2e8f0;
+            font-size: 13px;
+            font-weight: bold;
+        }
+        .modal-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+        .modal-body textarea {
+            width: 100%;
+            height: 140px;
+            background: #090d16;
+            color: #38bdf8;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            padding: 10px;
+            font-family: monospace;
+            font-size: 13px;
+            resize: vertical;
+            outline: none;
+        }
+        .modal-footer { display: flex; justify-content: space-between; align-items: center; }
     </style>
 </head>
 <body>
@@ -894,7 +882,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             <div class="author-badge">Created by <b>Luis Castillo</b></div>
         </div>
         <div>
-            <button class="btn btn-success" onclick="loadFiles()">+ Load & Parse XML Files</button>
+            <button class="btn btn-success" onclick="loadFilesBatch()">+ Load & Parse XML Files</button>
         </div>
     </header>
 
@@ -932,10 +920,63 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
                 </table>
             </div>
         </div>
+
+        <!-- Dedicated SVG Viewer Overlay Stage -->
+        <div id="screen-viewer-view">
+            <div class="viewer-top-bar">
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <button class="btn btn-nav" onclick="closeScreenViewer()">← Back to Search Hub</button>
+                    <span id="viewer-screen-title"><b>Screen:</b></span>
+                </div>
+                <div>
+                    <button id="toggle-tag-btn" class="btn" onclick="toggleTagOverlay()">Toggle Tag Highlight Box</button>
+                </div>
+            </div>
+            <div class="viewer-stage">
+                <svg id="screen-svg-canvas" preserveAspectRatio="xMidYMid meet"></svg>
+            </div>
+        </div>
+    </div>
+
+    <!-- Progress Modal -->
+    <div id="progress-modal">
+        <div class="progress-box">
+            <h3 style="font-size: 15px; color: #38bdf8;">Parsing & Indexing XML Files...</h3>
+            <div class="progress-track">
+                <div class="progress-fill" id="progress-fill"></div>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 12px; color: #94a3b8;">
+                <span id="progress-status-file">Processing...</span>
+                <span id="progress-status-count">0 / 0</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Inspector Modal -->
+    <div id="viewer-tag-tooltip"></div>
+    <div id="inspector-modal" onclick="closeInspectorModal()">
+        <div class="modal-box" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <span>Element Tag & Expression Inspector</span>
+                <button class="btn btn-nav" onclick="closeInspectorModal()" style="padding: 2px 8px;">✕</button>
+            </div>
+            <div class="modal-body">
+                <textarea id="modal-tag-textarea" spellcheck="false"></textarea>
+                <div class="modal-footer">
+                    <span id="copy-status" style="color: #4ade80; font-size: 12px; display: none;">✓ Copied to clipboard!</span>
+                    <div style="margin-left: auto; display: flex; gap: 8px;">
+                        <button class="btn" style="background:#0284c7;" onclick="copyModalText()">Copy All</button>
+                        <button class="btn btn-nav" onclick="closeInspectorModal()">Close</button>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
         let currentTab = 'displays';
+        let overlayActive = false;
+        let isInspectorOpen = false;
 
         function switchTab(tab) {
             currentTab = tab;
@@ -948,13 +989,35 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             } else if (tab === 'labels') {
                 searchInput.placeholder = "Type text to find all screens where this caption appears...";
             } else if (tab === 'tags') {
-                searchInput.placeholder = "Search by PLC tag e.g. /CH01/Data_1::[CH01_303] or Status...";
+                searchInput.placeholder = "Search by PLC tag e.g. /CH01/Data_1::[CH01_042] or Status...";
             }
             onSearchInput(searchInput.value);
         }
 
-        async function loadFiles() {
-            const summary = await window.pywebview.api.load_files_dialog();
+        async function loadFilesBatch() {
+            const fileList = await window.pywebview.api.open_file_picker();
+            if (!fileList || fileList.length === 0) return;
+
+            const modal = document.getElementById('progress-modal');
+            const fill = document.getElementById('progress-fill');
+            const fileStatus = document.getElementById('progress-status-file');
+            const countStatus = document.getElementById('progress-status-count');
+
+            modal.style.display = 'flex';
+            const total = fileList.length;
+            let summary = null;
+
+            for (let i = 0; i < total; i++) {
+                const path = fileList[i];
+                const fileName = path.replace(/^.*[\\\\/]/, '');
+                fileStatus.textContent = fileName;
+                countStatus.textContent = `${i + 1} / ${total}`;
+                fill.style.width = `${Math.round(((i + 1) / total) * 100)}%`;
+
+                summary = await window.pywebview.api.parse_single_file(path);
+            }
+
+            modal.style.display = 'none';
             if (summary) {
                 document.getElementById('stat-displays').textContent = summary.displays;
                 document.getElementById('stat-elements').textContent = summary.elements;
@@ -1021,6 +1084,78 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             }
         }
 
+        async function openScreen(displayName) {
+            const data = await window.pywebview.api.get_screen_render_data(displayName);
+            if (!data) return;
+
+            const svg = document.getElementById('screen-svg-canvas');
+            svg.setAttribute('viewBox', `0 0 ${data.width} ${data.height}`);
+            svg.style.backgroundColor = data.bg_color;
+            svg.innerHTML = data.svg;
+
+            document.getElementById('viewer-screen-title').innerHTML = `<b>Screen:</b> ${data.file_name} (${data.width}×${data.height})`;
+            document.getElementById('screen-viewer-view').style.display = 'flex';
+        }
+
+        function closeScreenViewer() {
+            document.getElementById('screen-viewer-view').style.display = 'none';
+        }
+
+        function toggleTagOverlay() {
+            overlayActive = !overlayActive;
+            document.getElementById('screen-viewer-view').classList.toggle('show-tags', overlayActive);
+            document.getElementById('toggle-tag-btn').textContent = overlayActive ? 'Hide Tag Outlines' : 'Toggle Tag Highlight Box';
+        }
+
+        // SVG Hover & Click inspection
+        const tooltip = document.getElementById('viewer-tag-tooltip');
+        const inspectorModal = document.getElementById('inspector-modal');
+        const modalTextarea = document.getElementById('modal-tag-textarea');
+        const copyStatus = document.getElementById('copy-status');
+
+        document.addEventListener('mouseover', (e) => {
+            if (isInspectorOpen) return;
+            const target = e.target.closest('[data-tag-info]');
+            if (target && document.getElementById('screen-viewer-view').style.display === 'flex') {
+                tooltip.style.display = 'block';
+                tooltip.textContent = target.getAttribute('data-tag-info');
+            }
+        });
+
+        document.addEventListener('mouseout', (e) => {
+            if (isInspectorOpen) return;
+            const target = e.target.closest('[data-tag-info]');
+            if (target) tooltip.style.display = 'none';
+        });
+
+        document.addEventListener('click', (e) => {
+            const target = e.target.closest('[data-tag-info]');
+            if (target && document.getElementById('screen-viewer-view').style.display === 'flex') {
+                e.stopPropagation();
+                const rawInfo = target.getAttribute('data-tag-info');
+                if (rawInfo) {
+                    modalTextarea.value = rawInfo.split(' | ').join('\\n');
+                    inspectorModal.style.display = 'flex';
+                    isInspectorOpen = true;
+                    tooltip.style.display = 'none';
+                    copyStatus.style.display = 'none';
+                    setTimeout(() => { modalTextarea.focus(); modalTextarea.select(); }, 50);
+                }
+            }
+        });
+
+        function closeInspectorModal() {
+            inspectorModal.style.display = 'none';
+            isInspectorOpen = false;
+        }
+
+        function copyModalText() {
+            modalTextarea.select();
+            navigator.clipboard.writeText(modalTextarea.value);
+            copyStatus.style.display = 'inline';
+            setTimeout(() => { copyStatus.style.display = 'none'; }, 2000);
+        }
+
         function formatTags(tagString) {
             if (!tagString) return '<span style="color:#64748b;">None</span>';
             return tagString.split(' | ').map(t => `<div class="tag-pill">${escapeHtml(t)}</div>`).join('');
@@ -1030,9 +1165,12 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             return (text || '').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
         }
 
-        function openScreen(displayName) {
-            window.pywebview.api.open_screen(displayName);
-        }
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                if (isInspectorOpen) closeInspectorModal();
+                else if (document.getElementById('screen-viewer-view').style.display === 'flex') closeScreenViewer();
+            }
+        });
     </script>
 </body>
 </html>"""
