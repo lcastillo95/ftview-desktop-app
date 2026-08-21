@@ -567,7 +567,6 @@ class DesktopAppBridge:
   def open_file_picker(self):
     if not self.window:
       return []
-    # Native Webview File Dialog - runs smoothly without Tkinter freeze
     file_types = (
         "FactoryTalk XML Files (*.xml)",
         "All files (*.*)",
@@ -616,6 +615,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             flex-direction: column;
             height: 100vh;
             overflow: hidden;
+            user-select: text;
         }
         header {
             background-color: #1e293b;
@@ -836,6 +836,8 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             z-index: 150;
             pointer-events: none;
         }
+
+        /* Inspector Modal */
         #inspector-modal {
             display: none;
             position: fixed;
@@ -850,10 +852,11 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             border: 1px solid #38bdf8;
             border-radius: 8px;
             width: 90%;
-            max-width: 620px;
+            max-width: 640px;
             display: flex;
             flex-direction: column;
             overflow: hidden;
+            box-shadow: 0 12px 28px rgba(0, 0, 0, 0.85);
         }
         .modal-header {
             background: #0f172a;
@@ -866,21 +869,56 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             font-size: 13px;
             font-weight: bold;
         }
-        .modal-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+        .modal-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; position: relative; }
         .modal-body textarea {
             width: 100%;
-            height: 140px;
+            height: 150px;
             background: #090d16;
             color: #38bdf8;
             border: 1px solid #334155;
             border-radius: 6px;
             padding: 10px;
-            font-family: monospace;
+            font-family: 'Consolas', 'Courier New', monospace;
             font-size: 13px;
+            line-height: 1.45;
             resize: vertical;
             outline: none;
+            user-select: text !important;
+            -webkit-user-select: text !important;
         }
+        .modal-body textarea:focus { border-color: #38bdf8; }
         .modal-footer { display: flex; justify-content: space-between; align-items: center; }
+
+        /* Custom Right-Click Context Menu */
+        #custom-context-menu {
+            display: none;
+            position: fixed;
+            background: #1e293b;
+            border: 1px solid #38bdf8;
+            box-shadow: 0 6px 18px rgba(0,0,0,0.6);
+            border-radius: 6px;
+            padding: 4px 0;
+            z-index: 1000;
+            min-width: 150px;
+        }
+        .context-menu-item {
+            padding: 8px 14px;
+            font-size: 12px;
+            color: #f1f5f9;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .context-menu-item:hover {
+            background-color: #0284c7;
+            color: #ffffff;
+        }
+        .context-menu-divider {
+            height: 1px;
+            background: #334155;
+            margin: 4px 0;
+        }
     </style>
 </head>
 <body>
@@ -974,12 +1012,20 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
                 <div class="modal-footer">
                     <span id="copy-status" style="color: #4ade80; font-size: 12px; display: none;">✓ Copied to clipboard!</span>
                     <div style="margin-left: auto; display: flex; gap: 8px;">
-                        <button class="btn" style="background:#0284c7;" onclick="copyModalText()">Copy All</button>
+                        <button class="btn" style="background:#0284c7;" onclick="copyAllText()">Copy All</button>
                         <button class="btn btn-nav" onclick="closeInspectorModal()">Close</button>
                     </div>
                 </div>
             </div>
         </div>
+    </div>
+
+    <!-- Custom Context Menu for Right-Click -->
+    <div id="custom-context-menu">
+        <div class="context-menu-item" onclick="contextCopySelection()">Copy Selection <span>Ctrl+C</span></div>
+        <div class="context-menu-item" onclick="contextCopyAll()">Copy All <span>Ctrl+A, C</span></div>
+        <div class="context-menu-divider"></div>
+        <div class="context-menu-item" onclick="contextSelectAll()">Select All</div>
     </div>
 
     <script>
@@ -1116,10 +1162,12 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
             document.getElementById('toggle-tag-btn').textContent = overlayActive ? 'Hide Tag Outlines' : 'Toggle Tag Highlight Box';
         }
 
+        // SVG Hover & Click inspection
         const tooltip = document.getElementById('viewer-tag-tooltip');
         const inspectorModal = document.getElementById('inspector-modal');
         const modalTextarea = document.getElementById('modal-tag-textarea');
         const copyStatus = document.getElementById('copy-status');
+        const contextMenu = document.getElementById('custom-context-menu');
 
         document.addEventListener('mouseover', (e) => {
             if (isInspectorOpen) return;
@@ -1137,6 +1185,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
         });
 
         document.addEventListener('click', (e) => {
+            hideContextMenu();
             const target = e.target.closest('[data-tag-info]');
             if (target && document.getElementById('screen-viewer-view').style.display === 'flex') {
                 e.stopPropagation();
@@ -1147,21 +1196,78 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
                     isInspectorOpen = true;
                     tooltip.style.display = 'none';
                     copyStatus.style.display = 'none';
-                    setTimeout(() => { modalTextarea.focus(); modalTextarea.select(); }, 50);
+                    setTimeout(() => {
+                        modalTextarea.focus();
+                        modalTextarea.select();
+                    }, 50);
                 }
             }
         });
 
+        // Dedicated Right-Click Handling on Modal Textarea
+        modalTextarea.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const mouseX = e.clientX;
+            const mouseY = e.clientY;
+            contextMenu.style.top = mouseY + 'px';
+            contextMenu.style.left = mouseX + 'px';
+            contextMenu.style.display = 'block';
+        });
+
+        function hideContextMenu() {
+            contextMenu.style.display = 'none';
+        }
+
+        function executeCopy(textToCopy) {
+            if (!textToCopy) return;
+            // Strategy 1: execCommand (Works in WebViews without clipboard permission prompts)
+            const temp = document.createElement("textarea");
+            temp.value = textToCopy;
+            document.body.appendChild(temp);
+            temp.select();
+            try {
+                document.execCommand("copy");
+                showCopiedFeedback();
+            } catch (err) {
+                // Strategy 2: Modern Clipboard API
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(textToCopy).then(showCopiedFeedback);
+                }
+            }
+            document.body.removeChild(temp);
+            hideContextMenu();
+        }
+
+        function showCopiedFeedback() {
+            copyStatus.style.display = 'inline';
+            setTimeout(() => { copyStatus.style.display = 'none'; }, 2000);
+        }
+
+        function contextCopySelection() {
+            const start = modalTextarea.selectionStart;
+            const end = modalTextarea.selectionEnd;
+            const selectedText = modalTextarea.value.substring(start, end) || modalTextarea.value;
+            executeCopy(selectedText);
+        }
+
+        function contextCopyAll() {
+            executeCopy(modalTextarea.value);
+        }
+
+        function copyAllText() {
+            executeCopy(modalTextarea.value);
+        }
+
+        function contextSelectAll() {
+            modalTextarea.select();
+            hideContextMenu();
+        }
+
         function closeInspectorModal() {
             inspectorModal.style.display = 'none';
             isInspectorOpen = false;
-        }
-
-        function copyModalText() {
-            modalTextarea.select();
-            navigator.clipboard.writeText(modalTextarea.value);
-            copyStatus.style.display = 'inline';
-            setTimeout(() => { copyStatus.style.display = 'none'; }, 2000);
+            hideContextMenu();
         }
 
         function formatTags(tagString) {
@@ -1175,6 +1281,7 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
 
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
+                hideContextMenu();
                 if (isInspectorOpen) closeInspectorModal();
                 else if (document.getElementById('screen-viewer-view').style.display === 'flex') closeScreenViewer();
             }
@@ -1195,6 +1302,7 @@ def main():
       width=1360,
       height=860,
       resizable=True,
+      text_select=True,  # Explicitly allow desktop text selection
   )
   bridge.window = window
   webview.start()
