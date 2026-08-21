@@ -3,7 +3,6 @@ import io
 import math
 import os
 import re
-import shutil
 import sqlite3
 import sys
 import threading
@@ -19,6 +18,12 @@ def get_app_data_path() -> str:
   app_dir = os.path.join(base_dir, "HMITagFinder")
   os.makedirs(app_dir, exist_ok=True)
   return app_dir
+
+
+def get_screens_dir() -> str:
+  screens_dir = os.path.join(get_app_data_path(), "screens")
+  os.makedirs(screens_dir, exist_ok=True)
+  return screens_dir
 
 
 class FlattenedFTViewCompiler:
@@ -450,16 +455,6 @@ class FlattenedFTViewCompiler:
           "</g>"
       )
 
-    elif "left" in elem.attrib and "top" in elem.attrib:
-      x = round(float(elem.attrib.get("left", 0)), 1)
-      y = round(float(elem.attrib.get("top", 0)), 1)
-      w = round(float(elem.attrib.get("width", 10)), 1)
-      h = round(float(elem.attrib.get("height", 10)), 1)
-      return (
-          f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="none"'
-          f' stroke="none" {tf} {tag_attr}/>'
-      )
-
     return ""
 
   def _render_node(self, node, accumulated_tags: list) -> list:
@@ -514,21 +509,19 @@ class FTViewDatabaseHub:
 
   def __init__(self):
     self.lock = threading.RLock()
-    app_dir = get_app_data_path()
-    self.db_path = os.path.join(app_dir, "hmitagfinder.db")
+    self.app_dir = get_app_data_path()
+    self.screens_dir = get_screens_dir()
+    self.db_path = os.path.join(self.app_dir, "hmitagfinder.db")
     self._init_db_safe()
 
   def _init_db_safe(self):
     try:
       self._setup_schema()
     except Exception as e:
-      print(f"Warning: Database error encountered on startup ({e}). Rebuilding clean schema.")
+      print(f"Schema recovery trigger: {e}")
       try:
         if os.path.exists(self.db_path):
           os.remove(self.db_path)
-        for ext in ("-wal", "-shm"):
-          if os.path.exists(self.db_path + ext):
-            os.remove(self.db_path + ext)
       except Exception:
         pass
       self._setup_schema()
@@ -543,7 +536,7 @@ class FTViewDatabaseHub:
                     CREATE TABLE IF NOT EXISTS display_files (
                         display_name TEXT PRIMARY KEY,
                         display_normalized TEXT,
-                        xml_bytes BLOB
+                        file_path TEXT
                     )
                 """)
         cur.execute("""
@@ -555,20 +548,6 @@ class FTViewDatabaseHub:
                         tags TEXT
                     )
                 """)
-        cur.execute("PRAGMA table_info(display_files);")
-        df_cols = [row[1] for row in cur.fetchall()]
-        if "display_normalized" not in df_cols:
-          cur.execute(
-              "ALTER TABLE display_files ADD COLUMN display_normalized TEXT;"
-          )
-
-        cur.execute("PRAGMA table_info(hmi_elements);")
-        he_cols = [row[1] for row in cur.fetchall()]
-        if "display_normalized" not in he_cols:
-          cur.execute(
-              "ALTER TABLE hmi_elements ADD COLUMN display_normalized TEXT;"
-          )
-
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_disp_files ON"
             " display_files(display_normalized)"
@@ -609,11 +588,18 @@ class FTViewDatabaseHub:
     with open(file_path, "rb") as f:
       xml_bytes = f.read()
 
+    # Save physical XML to disk storage (no bloated SQLite BLOBs)
+    cached_file_path = os.path.join(self.screens_dir, display_name)
+    with open(cached_file_path, "wb") as f:
+      f.write(xml_bytes)
+
     norm_name = self.normalize_display_name(display_name)
     tree = ET.parse(io.BytesIO(xml_bytes))
     root = tree.getroot()
 
+    dedup_elements = set()
     rows_to_insert = []
+
     for elem in root.iter():
       texts = []
       cap = elem.attrib.get("caption")
@@ -641,56 +627,52 @@ class FTViewDatabaseHub:
       for conn in elem.findall("./connections/connection"):
         expr = conn.attrib.get("expression") or conn.attrib.get("tag")
         if expr:
-          extracted = self.extract_ft_tags_from_text(expr)
-          if extracted:
-            tags.extend([x for x in extracted if x not in tags])
-          elif expr not in tags:
-            tags.append(expr)
+          for t in self.extract_ft_tags_from_text(expr):
+            if t not in tags:
+              tags.append(t)
 
       for anim in elem.findall("./animations/*"):
         expr = anim.attrib.get("expression") or anim.attrib.get("tag")
         if expr:
-          extracted = self.extract_ft_tags_from_text(expr)
-          if extracted:
-            tags.extend([x for x in extracted if x not in tags])
-          elif expr not in tags:
-            tags.append(expr)
+          for t in self.extract_ft_tags_from_text(expr):
+            if t not in tags:
+              tags.append(t)
 
       for act in elem.findall("./action"):
         t = act.attrib.get("tag")
         if t:
-          extracted = self.extract_ft_tags_from_text(t)
-          if extracted:
-            tags.extend([x for x in extracted if x not in tags])
-          elif t not in tags:
-            tags.append(t)
+          for tg in self.extract_ft_tags_from_text(t):
+            if tg not in tags:
+              tags.append(tg)
 
       for cmd in elem.findall("./command"):
         for attr in ("pressAction", "releaseAction"):
           c = cmd.attrib.get(attr)
           if c:
-            extracted = self.extract_ft_tags_from_text(c)
-            if extracted:
-              tags.extend([x for x in extracted if x not in tags])
-            elif c not in tags:
-              tags.append(c)
+            for tg in self.extract_ft_tags_from_text(c):
+              if tg not in tags:
+                tags.append(tg)
 
       if texts or tags:
         label_text_col = "\n".join(texts)
         tags_col = " | ".join(tags)
-        rows_to_insert.append(
-            (display_name, norm_name, label_text_col, tags_col)
-        )
+        sig = (label_text_col, tags_col)
+        # Deduplicate repeated identical group elements
+        if sig not in dedup_elements:
+          dedup_elements.add(sig)
+          rows_to_insert.append(
+              (display_name, norm_name, label_text_col, tags_col)
+          )
 
     with self.lock:
       with sqlite3.connect(self.db_path, timeout=30.0) as conn:
         cur = conn.cursor()
         cur.execute(
             """
-                    INSERT OR REPLACE INTO display_files (display_name, display_normalized, xml_bytes)
+                    INSERT OR REPLACE INTO display_files (display_name, display_normalized, file_path)
                     VALUES (?, ?, ?)
                 """,
-            (display_name, norm_name, xml_bytes),
+            (display_name, norm_name, cached_file_path),
         )
         cur.execute(
             "DELETE FROM hmi_elements WHERE display_name = ?", (display_name,)
@@ -706,15 +688,14 @@ class FTViewDatabaseHub:
         conn.commit()
 
   def get_xml_bytes(self, display_name: str) -> bytes:
-    with self.lock:
-      with sqlite3.connect(self.db_path, timeout=30.0) as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT xml_bytes FROM display_files WHERE display_name = ?",
-            (display_name,),
-        )
-        row = cur.fetchone()
-        return row[0] if row else None
+    cached_file_path = os.path.join(self.screens_dir, display_name)
+    if os.path.exists(cached_file_path):
+      try:
+        with open(cached_file_path, "rb") as f:
+          return f.read()
+      except Exception as e:
+        print(f"File read error {cached_file_path}: {e}")
+    return None
 
   def get_summary(self):
     with self.lock:
@@ -733,7 +714,17 @@ class FTViewDatabaseHub:
         cur.execute("DELETE FROM hmi_elements;")
         cur.execute("DELETE FROM display_files;")
         conn.commit()
-        return {"displays": 0, "elements": 0}
+
+      # Clear cached disk files
+      for f in os.listdir(self.screens_dir):
+        fp = os.path.join(self.screens_dir, f)
+        if os.path.isfile(fp):
+          try:
+            os.remove(fp)
+          except Exception:
+            pass
+
+      return {"displays": 0, "elements": 0}
 
   def get_all_displays(self):
     with self.lock:
@@ -837,7 +828,7 @@ class DesktopAppBridge:
           "displays": displays,
       }
     except Exception as e:
-      print(f"Error in get_initial_data: {e}")
+      print(f"Bridge init error: {e}")
       return {"displays_count": 0, "elements_count": 0, "displays": []}
 
   def open_import_dialog(self):
@@ -850,7 +841,7 @@ class DesktopAppBridge:
           webview.OPEN_DIALOG, allow_multiple=True, file_types=file_types
       )
     except Exception as e:
-      print(f"Dialog error: {e}")
+      print(f"Dialog invocation error: {e}")
       return {"started": False, "canceled": True}
 
     if not result:
@@ -900,28 +891,28 @@ class DesktopAppBridge:
     try:
       return self.db.clear_database()
     except Exception as e:
-      print(f"Error clearing database: {e}")
+      print(f"Clear DB error: {e}")
       return {"displays": 0, "elements": 0}
 
   def search_displays(self, query=""):
     try:
       return self.db.search_by_display(query)
     except Exception as e:
-      print(f"Error search_displays: {e}")
+      print(f"Search displays error: {e}")
       return []
 
   def search_labels(self, query=""):
     try:
       return self.db.search_by_label(query)
     except Exception as e:
-      print(f"Error search_labels: {e}")
+      print(f"Search labels error: {e}")
       return []
 
   def search_tags(self, query=""):
     try:
       return self.db.search_by_tag(query)
     except Exception as e:
-      print(f"Error search_tags: {e}")
+      print(f"Search tags error: {e}")
       return []
 
   def get_screen_render_data(self, display_name):
@@ -932,7 +923,7 @@ class DesktopAppBridge:
       compiler = FlattenedFTViewCompiler(xml_bytes, display_name)
       return compiler.compile_svg_bundle()
     except Exception as e:
-      print(f"Error rendering screen {display_name}: {e}")
+      print(f"Render error for {display_name}: {e}")
       return None
 
 
@@ -1494,39 +1485,30 @@ MAIN_PORTAL_HTML = """<!DOCTYPE html>
         let searchDebounceTimer = null;
         let currentDisplayLoading = null;
         let renderTimeoutTimer = null;
-        let isInitialLoaded = false;
-        let isInitialLoading = false;
         let isImporting = false;
 
         function escapeJsString(str) {
             return (str || '').replace(/\\\\/g, '\\\\\\\\').replace(/'/g, "\\\\'");
         }
 
-        async function requestInitialLoad() {
-            if (isInitialLoaded || isInitialLoading) return;
+        async function initApp() {
             if (!window.pywebview || !window.pywebview.api || !window.pywebview.api.get_initial_data) {
-                setTimeout(requestInitialLoad, 150);
                 return;
             }
 
-            isInitialLoading = true;
             try {
                 const data = await window.pywebview.api.get_initial_data();
                 if (data) {
-                    isInitialLoaded = true;
                     document.getElementById('stat-displays').textContent = data.displays_count || 0;
                     document.getElementById('stat-elements').textContent = data.elements_count || 0;
                     renderDisplaysTable(data.displays || []);
                 }
             } catch (e) {
                 console.error("Initial load error:", e);
-            } finally {
-                isInitialLoading = false;
             }
         }
 
-        window.addEventListener('pywebviewready', requestInitialLoad);
-        document.addEventListener('DOMContentLoaded', requestInitialLoad);
+        window.addEventListener('pywebviewready', initApp);
 
         function renderDisplaysTable(results) {
             const tbody = document.getElementById('table-body');
